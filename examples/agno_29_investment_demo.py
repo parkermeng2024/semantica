@@ -25,11 +25,12 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TextIO, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TextIO, Tuple
 
-from semantica.context import AgentContext, ContextGraph
 from semantica.utils.logging import get_logger
-from semantica.vector_store import VectorStore
+
+if TYPE_CHECKING:
+    from semantica.context import AgentContext
 
 logger = get_logger(__name__)
 
@@ -84,6 +85,9 @@ def load_case(path: Path) -> Dict[str, Any]:
 
 def build_context() -> AgentContext:
     """Build the in-memory AgentContext shared by both toolkits."""
+    from semantica.context import AgentContext, ContextGraph
+    from semantica.vector_store import VectorStore
+
     graph = ContextGraph(advanced_analytics=False)
     vectors = VectorStore(backend="inmemory")
     return AgentContext(
