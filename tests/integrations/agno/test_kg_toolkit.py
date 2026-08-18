@@ -434,3 +434,47 @@ class TestExportSubgraph(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStructuredParameterEquivalence(unittest.TestCase):
+    """Tools must accept structured objects as well as JSON strings."""
+
+    def setUp(self):
+        self.graph = _FakeGraph()
+        self.kit = AgnoKGToolkit(
+            ner_extractor=_FakeNER(),
+            relation_extractor=_FakeRelExtractor(),
+            reasoner=_FakeReasoner(),
+        )
+        self.kit._graph = self.graph
+
+    def test_add_to_graph_accepts_list_directly(self):
+        entities = [{"name": "Alice", "type": "PERSON", "properties": {"age": 34}}]
+        relations = [{"source": "Alice", "relation": "WORKS_AT", "target": "ACME"}]
+        direct = json.loads(self.kit.add_to_graph(entities=entities, relations=relations))
+        self.assertEqual(direct, {"nodes_added": 1, "edges_added": 1})
+        self.assertEqual(self.graph._node_store["Alice"]["metadata"]["age"], 34)
+
+    def test_add_to_graph_list_equivalent_to_json_string(self):
+        entities = [{"name": "Bob", "type": "PERSON"}]
+        direct = json.loads(self.kit.add_to_graph(entities=entities))
+        as_string = json.loads(self.kit.add_to_graph(entities=json.dumps(entities)))
+        self.assertEqual(direct, as_string)
+
+    def test_add_to_graph_wraps_single_object(self):
+        result = json.loads(self.kit.add_to_graph(entities={"name": "Solo", "type": "X"}))
+        self.assertEqual(result["nodes_added"], 1)
+
+    def test_add_to_graph_bad_type_is_actionable_error(self):
+        result = json.loads(self.kit.add_to_graph(entities=42))
+        self.assertIn("JSON array", result["error"])
+
+    def test_extract_relations_accepts_entity_list(self):
+        direct = json.loads(self.kit.extract_relations("text", entities=["Tesla"]))
+        as_string = json.loads(self.kit.extract_relations("text", entities='["Tesla"]'))
+        self.assertEqual(direct["count"], as_string["count"])
+
+    def test_infer_facts_accepts_rule_list(self):
+        direct = json.loads(self.kit.infer_facts(rules=["IF X(?a) THEN Y(?a)"]))
+        as_string = json.loads(self.kit.infer_facts(rules='["IF X(?a) THEN Y(?a)"]'))
+        self.assertEqual(direct["count"], as_string["count"])
