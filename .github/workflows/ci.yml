@@ -60,7 +60,7 @@ jobs:
             <(grep -E '^[a-zA-Z0-9._-]+==' /tmp/requirements-ci-check.txt)
       - run: pip install build
       - name: Test Agno 2.9 Toolkit contract
-        run: pytest -q tests/integration/test_agno_29_contract.py
+        run: python -m pytest -q tests/integration/test_agno_29_contract.py
       # wheel is build-time only (not in requirements-ci.txt) — install the
       # same pinned version [build-system] declares so --no-isolation works.
       - run: pip install wheel==0.48.0
