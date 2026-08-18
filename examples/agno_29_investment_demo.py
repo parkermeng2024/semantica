@@ -200,34 +200,11 @@ def validate_run(run_output: Any, context: AgentContext) -> ValidationResult:
         "find_precedents": 1,
     }
     required_exact = {"check_policy": 1, "record_decision": 1}
-    accepted_outcomes = {"rejected", "deferred_with_conditions"}
 
     errors: List[str] = []
-    counts: Dict[str, int] = {}
-    policy_result: Dict[str, Any] = {}
-    decision_result: Dict[str, Any] = {}
-
-    for tool in getattr(run_output, "tools", None) or []:
-        name = getattr(tool, "tool_name", "") or ""
-        counts[name] = counts.get(name, 0) + 1
-        if getattr(tool, "tool_call_error", False):
-            errors.append(f"tool call failed: {name}")
-            continue
-        try:
-            result = json.loads(getattr(tool, "result", "") or "")
-        except (TypeError, json.JSONDecodeError):
-            errors.append(f"tool '{name}' returned invalid JSON")
-            continue
-        if not isinstance(result, dict):
-            errors.append(f"tool '{name}' returned a non-object result")
-            continue
-        if result.get("error"):
-            errors.append(f"tool '{name}' failed: {result['error']}")
-            continue
-        if name == "check_policy":
-            policy_result = result
-        elif name == "record_decision":
-            decision_result = result
+    counts, policy_result, decision_result = _collect_tool_results(
+        getattr(run_output, "tools", None) or [], errors
+    )
 
     for name, minimum in required_minimum.items():
         if counts.get(name, 0) < minimum:
@@ -237,6 +214,74 @@ def validate_run(run_output: Any, context: AgentContext) -> ValidationResult:
             errors.append(
                 f"{name} must be called exactly once; observed {counts.get(name, 0)}"
             )
+
+    decision_id, audit_record = _audit_decision(
+        decision_result, policy_result, context, errors
+    )
+
+    return ValidationResult(
+        ok=not errors,
+        errors=tuple(errors),
+        decision_id=decision_id,
+        policy_result=policy_result,
+        audit_record=audit_record,
+    )
+
+
+def _collect_tool_results(
+    tools: List[Any],
+    errors: List[str],
+    prefix: str = "",
+) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
+    """
+    Count tool calls and harvest the policy / decision results from a tool
+    trace.  ``prefix`` scopes error messages to a committee role (empty for
+    single-Agent runs).
+    """
+    counts: Dict[str, int] = {}
+    policy_result: Dict[str, Any] = {}
+    decision_result: Dict[str, Any] = {}
+
+    for tool in tools:
+        name = getattr(tool, "tool_name", "") or ""
+        counts[name] = counts.get(name, 0) + 1
+        if getattr(tool, "tool_call_error", False):
+            errors.append(f"{prefix}tool call failed: {name}")
+            continue
+        if name == "delegate_task_to_member":
+            # Agno orchestration plumbing, not governance evidence — its
+            # result is the member's prose answer, not toolkit JSON.
+            continue
+        try:
+            result = json.loads(getattr(tool, "result", "") or "")
+        except (TypeError, json.JSONDecodeError):
+            errors.append(f"{prefix}tool '{name}' returned invalid JSON")
+            continue
+        if not isinstance(result, dict):
+            errors.append(f"{prefix}tool '{name}' returned a non-object result")
+            continue
+        if result.get("error"):
+            errors.append(f"{prefix}tool '{name}' failed: {result['error']}")
+            continue
+        if name == "check_policy":
+            policy_result = result
+        elif name == "record_decision":
+            decision_result = result
+
+    return counts, policy_result, decision_result
+
+
+def _audit_decision(
+    decision_result: Dict[str, Any],
+    policy_result: Dict[str, Any],
+    context: AgentContext,
+    errors: List[str],
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Audit read-back: locate the recorded decision node, verify its type, and
+    enforce the governed outcome set / policy-contradiction rule.
+    """
+    accepted_outcomes = {"rejected", "deferred_with_conditions"}
 
     decision_id: Optional[str] = decision_result.get("decision_id")
     audit_record: Optional[Dict[str, Any]] = None
@@ -264,6 +309,86 @@ def validate_run(run_output: Any, context: AgentContext) -> ValidationResult:
                     f"{sorted(accepted_outcomes)}"
                 )
 
+    return decision_id, audit_record
+
+
+# ---------------------------------------------------------------------------
+# Committee (Team) validation — team-level invariants over the aggregated
+# trace: leader tools + every member's tools, attributed by role
+# ---------------------------------------------------------------------------
+#: Default per-role call expectations for the investment committee.
+#: Values are ``(minimum, exact)`` — ``exact=None`` means "at least minimum".
+COMMITTEE_ROLE_EXPECTATIONS: Dict[str, Dict[str, Tuple[int, Optional[int]]]] = {
+    "analyst": {
+        "query_graph": (1, None),
+        "find_related": (1, None),
+        "find_precedents": (1, None),
+    },
+    "compliance": {"check_policy": (1, 1)},
+    "chair": {"record_decision": (1, 1)},
+}
+
+
+def _committee_traces(run_output: Any) -> Dict[str, List[Any]]:
+    """
+    Split a ``TeamRunOutput`` into per-role tool traces.  The leader's own
+    tools are keyed ``"chair"``; each member response is keyed by its
+    ``agent_name``.
+    """
+    traces: Dict[str, List[Any]] = {
+        "chair": list(getattr(run_output, "tools", None) or [])
+    }
+    for member in getattr(run_output, "member_responses", None) or []:
+        role = getattr(member, "agent_name", None) or "unknown"
+        traces[role] = list(getattr(member, "tools", None) or [])
+    return traces
+
+
+def validate_team_run(
+    run_output: Any,
+    context: AgentContext,
+    role_expectations: Optional[Dict[str, Dict[str, Tuple[int, Optional[int]]]]] = None,
+) -> ValidationResult:
+    """
+    Validate a committee (Agno ``Team``) run against team-level invariants.
+
+    Each role's trace is checked against its expectations — ``record_decision``
+    exactly once team-wide (chair), ``check_policy`` exactly once (compliance),
+    graph/precedent evidence at least once (analyst) — with error messages
+    attributing failures to the responsible role.  Policy-contradiction and
+    audit read-back rules are identical to the single-Agent path.
+    """
+    expectations = role_expectations or COMMITTEE_ROLE_EXPECTATIONS
+    traces = _committee_traces(run_output)
+
+    errors: List[str] = []
+    policy_result: Dict[str, Any] = {}
+    decision_result: Dict[str, Any] = {}
+
+    for role, expected in expectations.items():
+        role_tools = traces.get(role, [])
+        counts, role_policy, role_decision = _collect_tool_results(
+            role_tools, errors, prefix=f"{role}: "
+        )
+        if role_policy:
+            policy_result = role_policy
+        if role_decision:
+            decision_result = role_decision
+        for name, (minimum, exact) in expected.items():
+            observed = counts.get(name, 0)
+            if exact is not None:
+                if observed != exact:
+                    errors.append(
+                        f"{role}: {name} must be called exactly once; "
+                        f"observed {observed}"
+                    )
+            elif observed < minimum:
+                errors.append(f"{role}: missing required tool call: {name}")
+
+    decision_id, audit_record = _audit_decision(
+        decision_result, policy_result, context, errors
+    )
+
     return ValidationResult(
         ok=not errors,
         errors=tuple(errors),
@@ -276,6 +401,26 @@ def validate_run(run_output: Any, context: AgentContext) -> ValidationResult:
 # ---------------------------------------------------------------------------
 # Deterministic terminal rendering — no secrets, ever
 # ---------------------------------------------------------------------------
+def _trace_groups(run_output: Any) -> List[Tuple[str, List[Any]]]:
+    """
+    Group a run's tool trace for rendering.  Committee runs yield one group
+    per member (labelled by role) plus the chair group; single-Agent runs
+    yield a single unlabelled group.
+    """
+    members = list(getattr(run_output, "member_responses", None) or [])
+    if not members:
+        return [("", list(getattr(run_output, "tools", None) or []))]
+
+    role_labels = {"analyst": "分析师 Agent", "compliance": "合规 Agent"}
+    groups: List[Tuple[str, List[Any]]] = []
+    for member in members:
+        role = getattr(member, "agent_name", None) or "unknown"
+        label = role_labels.get(role, f"成员 {role}")
+        groups.append((f"{label}（{role}）", list(getattr(member, "tools", None) or [])))
+    groups.append(("主席收口（chair）", list(getattr(run_output, "tools", None) or [])))
+    return groups
+
+
 def render_execution(
     case_data: Dict[str, Any],
     run_output: Any,
@@ -296,19 +441,25 @@ def render_execution(
     for rule in case_data["policy_rules"]:
         print(f"- {rule}", file=stream)
 
+    groups = _trace_groups(run_output)
     print("\n=== Agno 工具调用轨迹 ===", file=stream)
-    for tool in getattr(run_output, "tools", None) or []:
-        state = "ERROR" if getattr(tool, "tool_call_error", False) else "OK"
-        print(f"[{state}] {tool.tool_name}", file=stream)
+    for label, tools in groups:
+        if label:
+            print(f"--- {label} ---", file=stream)
+        for tool in tools:
+            state = "ERROR" if getattr(tool, "tool_call_error", False) else "OK"
+            print(f"[{state}] {tool.tool_name}", file=stream)
     if debug:
         print("\n=== Sanitized tool details ===", file=stream)
-        for tool in getattr(run_output, "tools", None) or []:
-            details = {
-                "name": tool.tool_name,
-                "args": getattr(tool, "tool_args", None) or {},
-                "result": getattr(tool, "result", None),
-            }
-            print(json.dumps(details, ensure_ascii=False, indent=2), file=stream)
+        for label, tools in groups:
+            for tool in tools:
+                details = {
+                    "group": label or None,
+                    "name": tool.tool_name,
+                    "args": getattr(tool, "tool_args", None) or {},
+                    "result": getattr(tool, "result", None),
+                }
+                print(json.dumps(details, ensure_ascii=False, indent=2), file=stream)
 
     print("\n=== DeepSeek 投资建议 ===", file=stream)
     print(str(getattr(run_output, "content", "")), file=stream)
@@ -511,16 +662,279 @@ class SimpleNamespaceShim:
 
 
 # ---------------------------------------------------------------------------
+# Committee (Team) construction — analyst + compliance members, chair leader
+# ---------------------------------------------------------------------------
+def _make_scripted_model(steps: List[Tuple[str, Any]], model_id: str) -> Any:
+    """
+    Build a deterministic offline ``agno.models.base.Model`` subclass whose
+    ``invoke`` replays ``steps``: ``("tool", name, args_dict)`` entries emit a
+    tool call, ``("text", content)`` entries emit final assistant text.  Zero
+    network — the committee path stays testable in CI.
+
+    NOTE: instance attributes must not shadow ``Model._tool_name`` (a method
+    on the base class).
+    """
+    from agno.models.base import Model
+    from agno.models.response import ModelResponse
+
+    class ScriptedModel(Model):
+        def __init__(self) -> None:
+            super().__init__(id=model_id, provider="scripted")
+            self._script = list(steps)
+            self._step_idx = 0
+
+        def invoke(self, *args: Any, **kwargs: Any) -> Any:
+            step = self._script[min(self._step_idx, len(self._script) - 1)]
+            self._step_idx += 1
+            if step[0] == "tool":
+                return ModelResponse(
+                    role="assistant",
+                    tool_calls=[
+                        {
+                            "id": f"call_{self._step_idx}",
+                            "type": "function",
+                            "function": {
+                                "name": step[1],
+                                "arguments": json.dumps(step[2]),
+                            },
+                        }
+                    ],
+                )
+            return ModelResponse(role="assistant", content=step[1])
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+            return self.invoke(*args, **kwargs)
+
+        def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield self.invoke(*args, **kwargs)
+
+        async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield self.invoke(*args, **kwargs)
+
+        def _parse_provider_response(self, response: Any, **kwargs: Any) -> Any:
+            return ModelResponse(role="assistant", content="parsed")
+
+        def _parse_provider_response_delta(self, response: Any) -> Any:
+            return ModelResponse(role="assistant", content="delta")
+
+    return ScriptedModel()
+
+
+def _prune_tools(toolkit: Any, keep: set) -> Any:
+    """Restrict a toolkit to the named tools (role separation in the Team)."""
+    toolkit.functions = {k: v for k, v in toolkit.functions.items() if k in keep}
+    toolkit._tools = [fn for fn in toolkit._tools if fn.__name__ in keep]
+    return toolkit
+
+
+def _committee_instructions(role: str, case_data: Dict[str, Any]) -> List[str]:
+    """Live-mode role instructions for the investment committee."""
+    if role == "analyst":
+        return [
+            "You are the analyst on an investment committee. Respond in Chinese.",
+            f"Call query_graph for {case_data['project']}.",
+            f"Call find_related for {case_data['project']} with hops=2.",
+            f"Call find_precedents with category {case_data['category']}.",
+            "Summarise the graph evidence and precedent comparison; do not "
+            "record any decision.",
+        ]
+    if role == "compliance":
+        return [
+            "You are the compliance officer on an investment committee. "
+            "Respond in Chinese.",
+            "Build a decision_data object containing category, outcome, "
+            "confidence, customer_concentration, and regulatory_clearance.",
+            f"Call check_policy exactly once with these rules: {json.dumps(case_data['policy_rules'])}.",
+            "Report the violations; do not record any decision.",
+        ]
+    return [
+        "You are the chair of an investment committee. Respond in Chinese, "
+        "but record the machine outcome in English.",
+        "Delegate the evidence review to member_id 'analyst' and the policy "
+        "review to member_id 'compliance' via delegate_task_to_member.",
+        "If policy is not compliant, do not record outcome approved.",
+        "Call record_decision exactly once after both members reported.",
+        "The recorded outcome must be rejected or deferred_with_conditions.",
+        "Close with a Chinese synthesis citing the decision ID, graph "
+        "evidence, precedent comparison, and policy violations.",
+    ]
+
+
+def build_committee(
+    context: AgentContext,
+    shared: Any,
+    case_data: Dict[str, Any],
+    live: bool = False,
+    debug: bool = False,
+) -> Any:
+    """
+    Build the investment-committee Agno ``Team`` (coordinate mode).
+
+    - analyst: ``query_graph`` / ``find_related`` / ``find_precedents``
+    - compliance: ``check_policy``
+    - chair (Team leader): ``record_decision`` exactly once, after delegating
+      to both members
+
+    Both members run with ``db=shared.bind_agent(role)`` — role-scoped views
+    over the one shared ``ContextGraph``.  Offline mode drives the real Team
+    with scripted deterministic models (zero network); live mode uses
+    ``deepseek-v4-pro`` for all three roles.
+    """
+    from agno.agent import Agent
+    from agno.team.team import Team
+
+    from integrations.agno import AgnoDecisionKit, AgnoKGToolkit
+
+    kg = _prune_tools(AgnoKGToolkit(context=context), {"query_graph", "find_related"})
+    analyst_decisions = _prune_tools(
+        AgnoDecisionKit(context=context), {"find_precedents"}
+    )
+    compliance_kit = _prune_tools(AgnoDecisionKit(context=context), {"check_policy"})
+    chair_kit = _prune_tools(AgnoDecisionKit(context=context), {"record_decision"})
+
+    props = next(
+        item for item in case_data["entities"] if item["name"] == case_data["project"]
+    )["properties"]
+
+    if live:
+        from agno.models.deepseek import DeepSeek
+
+        def _model() -> Any:
+            return DeepSeek(id=MODEL_ID, use_thinking=True, max_retries=1, timeout=60.0)
+
+        analyst_model = _model()
+        compliance_model = _model()
+        chair_model = _model()
+        analyst_kwargs: Dict[str, Any] = {
+            "instructions": _committee_instructions("analyst", case_data)
+        }
+        compliance_kwargs: Dict[str, Any] = {
+            "instructions": _committee_instructions("compliance", case_data)
+        }
+        chair_kwargs: Dict[str, Any] = {
+            "instructions": _committee_instructions("chair", case_data)
+        }
+    else:
+        decision_data = {
+            "category": case_data["category"],
+            "outcome": "rejected",
+            "confidence": 0.9,
+            "customer_concentration": props["customer_concentration"],
+            "regulatory_clearance": props["regulatory_clearance"],
+        }
+        analyst_model = _make_scripted_model(
+            [
+                ("tool", "query_graph", {"query": case_data["project"]}),
+                ("tool", "find_related", {"entity": case_data["project"], "hops": 2}),
+                (
+                    "tool",
+                    "find_precedents",
+                    {
+                        "scenario": f"{case_data['project']} investment review",
+                        "category": case_data["category"],
+                    },
+                ),
+                ("text", "分析师结论：图谱证据显示客户集中度 46% 超标，先例 Project Atlas 曾被拒。"),
+            ],
+            "scripted-analyst",
+        )
+        compliance_model = _make_scripted_model(
+            [
+                (
+                    "tool",
+                    "check_policy",
+                    {
+                        "decision_data": json.dumps(decision_data),
+                        "policy_rules": json.dumps(case_data["policy_rules"]),
+                    },
+                ),
+                ("text", "合规结论：违反客户集中度与监管许可两条政策红线。"),
+            ],
+            "scripted-compliance",
+        )
+        chair_model = _make_scripted_model(
+            [
+                (
+                    "tool",
+                    "delegate_task_to_member",
+                    {"member_id": "analyst", "task": "评估图谱证据与历史先例"},
+                ),
+                (
+                    "tool",
+                    "delegate_task_to_member",
+                    {"member_id": "compliance", "task": "执行政策闸门评估"},
+                ),
+                (
+                    "tool",
+                    "record_decision",
+                    {
+                        "category": case_data["category"],
+                        "scenario": f"{case_data['project']} investment review",
+                        "reasoning": (
+                            "客户集中度 46% 超过 35% 上限且监管许可待批，"
+                            "与先例 Project Atlas 一致。"
+                        ),
+                        "outcome": "rejected",
+                        "confidence": 0.9,
+                        "entities": case_data["project"],
+                    },
+                ),
+                (
+                    "text",
+                    "【离线确定性模拟运行】主席收口：综合分析师图谱证据与合规政策评估，"
+                    "拒绝 Project Aurora 的 500 万美元投资，待监管许可完成且客户集中度"
+                    "下降后重新评估。本段为无模型的确定性输出，不经过 DeepSeek 生成。",
+                ),
+            ],
+            "scripted-chair",
+        )
+        analyst_kwargs = {}
+        compliance_kwargs = {}
+        chair_kwargs = {}
+
+    analyst = Agent(
+        name="analyst",
+        model=analyst_model,
+        tools=[kg, analyst_decisions],
+        db=shared.bind_agent("analyst"),
+        markdown=True,
+        debug_mode=debug,
+        **analyst_kwargs,
+    )
+    compliance = Agent(
+        name="compliance",
+        model=compliance_model,
+        tools=[compliance_kit],
+        db=shared.bind_agent("compliance"),
+        markdown=True,
+        debug_mode=debug,
+        **compliance_kwargs,
+    )
+    return Team(
+        name="investment_committee",
+        mode="coordinate",
+        model=chair_model,
+        members=[analyst, compliance],
+        tools=[chair_kit],
+        debug_mode=debug,
+        **chair_kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Orchestration and CLI
 # ---------------------------------------------------------------------------
 def execute_demo(
     debug: bool = False,
     live: bool = False,
+    committee: bool = False,
 ) -> Tuple[Dict[str, Any], Any, ValidationResult]:
     """
     Seed the demo data, run (live DeepSeek or offline simulation), and
-    validate the governed trace.  Returns the case data, the run output,
-    and the validation result.
+    validate the governed trace.  With ``committee=True`` the run is executed
+    by the investment-committee ``Team`` and checked against team-level
+    invariants.  Returns the case data, the run output, and the validation
+    result.
     """
     from integrations.agno import (
         AGNO_TOOLKITS_AVAILABLE,
@@ -538,6 +952,28 @@ def execute_demo(
         _require_runtime()
         if not AGNO_TOOLKITS_AVAILABLE:
             raise DemoConfigurationError("Agno 2.9 Toolkit integration is unavailable")
+
+    if committee:
+        from integrations.agno import AgnoSharedContext
+
+        shared = AgnoSharedContext(
+            vector_store=context.vector_store,
+            knowledge_graph=context.knowledge_graph,
+            decision_tracking=True,
+            advanced_analytics=False,
+            kg_algorithms=False,
+        )
+        team = build_committee(context, shared, case_data, live=live, debug=debug)
+        try:
+            run_output = team.run(case_data["request_zh"], stream=False)
+        except Exception as exc:
+            raise DemoModelError(
+                f"DeepSeek request failed: {type(exc).__name__}"
+            ) from exc
+        validation = validate_team_run(run_output, context)
+        return case_data, run_output, validation
+
+    if live:
         agent = build_agent(kg_toolkit, decision_toolkit, context, case_data, debug=debug)
         try:
             run_output = agent.run(case_data["request_zh"], stream=False)
@@ -563,6 +999,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="run against the real DeepSeek API (requires DEEPSEEK_API_KEY)",
     )
     parser.add_argument(
+        "--committee",
+        action="store_true",
+        help="run the multi-Agent investment committee Team instead of one Agent",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="print sanitized tool details and tracebacks",
@@ -570,7 +1011,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        case_data, run_output, validation = execute_demo(debug=args.debug, live=args.live)
+        case_data, run_output, validation = execute_demo(
+            debug=args.debug, live=args.live, committee=args.committee
+        )
     except DemoConfigurationError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         if args.debug:
