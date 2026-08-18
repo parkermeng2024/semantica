@@ -597,6 +597,49 @@ class _SimulatedTool:
         self.result = result
 
 
+def _rule_fields(policy_rules: List[str]) -> List[str]:
+    """Extract the field names referenced by ``<field> <op> <value>`` rules."""
+    import re
+
+    fields: List[str] = []
+    for rule in policy_rules:
+        m = re.match(r"(\w+)\s*(>=|<=|!=|==|>|<)", rule.strip())
+        if m and m.group(1) not in fields:
+            fields.append(m.group(1))
+    return fields
+
+
+def _build_decision_data(
+    case_data: Dict[str, Any], outcome: str, confidence: float
+) -> Dict[str, Any]:
+    """
+    Build a ``check_policy`` decision_data object fixture-agnostically: every
+    field referenced by the case's policy rules is copied from the project
+    entity's properties (``category``/``outcome``/``confidence`` come from
+    the decision itself).  A rule field missing from the fixture is a fixture
+    bug, surfaced as ``DemoValidationError``.
+    """
+    project_entity = next(
+        item for item in case_data["entities"] if item["name"] == case_data["project"]
+    )
+    props = project_entity["properties"]
+    data: Dict[str, Any] = {
+        "category": case_data["category"],
+        "outcome": outcome,
+        "confidence": confidence,
+    }
+    for field in _rule_fields(case_data["policy_rules"]):
+        if field in data:
+            continue
+        if field not in props:
+            raise DemoValidationError(
+                f"policy rule field {field!r} missing from "
+                f"{case_data['project']} properties in the case fixture"
+            )
+        data[field] = props[field]
+    return data
+
+
 def _simulate_run(
     case_data: Dict[str, Any],
     kg_toolkit: Any,
@@ -608,10 +651,6 @@ def _simulate_run(
     flows through the same ``validate_run`` / ``render_execution`` pipeline.
     """
     project = case_data["project"]
-    project_entity = next(
-        item for item in case_data["entities"] if item["name"] == project
-    )
-    props = project_entity["properties"]
 
     tools: List[_SimulatedTool] = []
 
@@ -633,13 +672,7 @@ def _simulate_run(
         )
     )
 
-    decision_data = {
-        "category": case_data["category"],
-        "outcome": "rejected",
-        "confidence": 0.9,
-        "customer_concentration": props["customer_concentration"],
-        "regulatory_clearance": props["regulatory_clearance"],
-    }
+    decision_data = _build_decision_data(case_data, outcome="rejected", confidence=0.9)
     policy_args = {
         "decision_data": json.dumps(decision_data),
         "policy_rules": json.dumps(case_data["policy_rules"]),
@@ -648,15 +681,14 @@ def _simulate_run(
     tools.append(_SimulatedTool("check_policy", policy_args, policy_raw))
 
     policy_result = json.loads(policy_raw)
+    violations = policy_result.get("violations", [])
     outcome = "rejected" if not policy_result.get("compliant", True) else "approved"
     record_args = {
         "category": case_data["category"],
         "scenario": f"{project} investment review",
         "reasoning": (
-            "Deterministic offline run: customer_concentration="
-            f"{props['customer_concentration']}, regulatory_clearance="
-            f"{props['regulatory_clearance']} → policy compliant="
-            f"{policy_result.get('compliant')}."
+            f"Deterministic offline run: policy compliant="
+            f"{policy_result.get('compliant')}, violations={violations}."
         ),
         "outcome": outcome,
         "confidence": 0.9,
@@ -670,11 +702,15 @@ def _simulate_run(
         )
     )
 
+    verdict = (
+        "拒绝推进，待政策违规项消除后重新评估。"
+        if outcome == "rejected"
+        else "批准推进。"
+    )
     content = (
-        f"【离线确定性模拟运行】基于图谱证据与先例对比，{project} 客户集中度 "
-        f"{props['customer_concentration']:.0%}（上限 35%），监管许可状态为"
-        f"「{'已获批' if props['regulatory_clearance'] else '待批'}」，违反两条政策红线。"
-        f"建议：{('拒绝投资，待监管许可完成且客户集中度下降后重新评估。' if outcome == 'rejected' else '批准投资。')}"
+        f"【离线确定性模拟运行】基于图谱证据与先例对比，{project} 触发 "
+        f"{len(violations)} 条政策违规：{violations}。"
+        f"建议：{verdict}"
         "本段为无模型的确定性输出，不经过 DeepSeek 生成。"
     )
     return SimpleNamespaceShim(content=content, tools=tools)
@@ -822,10 +858,6 @@ def build_committee(
     compliance_kit = _prune_tools(AgnoDecisionKit(context=shared), {"check_policy"})
     chair_kit = _prune_tools(AgnoDecisionKit(context=shared), {"record_decision"})
 
-    props = next(
-        item for item in case_data["entities"] if item["name"] == case_data["project"]
-    )["properties"]
-
     if live:
         from agno.models.deepseek import DeepSeek
 
@@ -845,26 +877,30 @@ def build_committee(
             "instructions": _committee_instructions("chair", case_data)
         }
     else:
-        decision_data = {
-            "category": case_data["category"],
-            "outcome": "rejected",
-            "confidence": 0.9,
-            "customer_concentration": props["customer_concentration"],
-            "regulatory_clearance": props["regulatory_clearance"],
-        }
+        decision_data = _build_decision_data(
+            case_data, outcome="rejected", confidence=0.9
+        )
+        policy_preview = json.loads(
+            compliance_kit.check_policy(
+                decision_data=json.dumps(decision_data),
+                policy_rules=json.dumps(case_data["policy_rules"]),
+            )
+        )
+        violation_count = len(policy_preview.get("violations", []))
+        project = case_data["project"]
         analyst_model = _make_scripted_model(
             [
-                ("tool", "query_graph", {"query": case_data["project"]}),
-                ("tool", "find_related", {"entity": case_data["project"], "hops": 2}),
+                ("tool", "query_graph", {"query": project}),
+                ("tool", "find_related", {"entity": project, "hops": 2}),
                 (
                     "tool",
                     "find_precedents",
                     {
-                        "scenario": f"{case_data['project']} investment review",
+                        "scenario": f"{project} investment review",
                         "category": case_data["category"],
                     },
                 ),
-                ("text", "分析师结论：图谱证据显示客户集中度 46% 超标，先例 Project Atlas 曾被拒。"),
+                ("text", f"分析师结论：已完成 {project} 的图谱证据与历史先例比对。"),
             ],
             "scripted-analyst",
         )
@@ -878,7 +914,7 @@ def build_committee(
                         "policy_rules": json.dumps(case_data["policy_rules"]),
                     },
                 ),
-                ("text", "合规结论：违反客户集中度与监管许可两条政策红线。"),
+                ("text", f"合规结论：{project} 触发 {violation_count} 条政策违规。"),
             ],
             "scripted-compliance",
         )
@@ -899,21 +935,22 @@ def build_committee(
                     "record_decision",
                     {
                         "category": case_data["category"],
-                        "scenario": f"{case_data['project']} investment review",
+                        "scenario": f"{project} investment review",
                         "reasoning": (
-                            "客户集中度 46% 超过 35% 上限且监管许可待批，"
-                            "与先例 Project Atlas 一致。"
+                            f"{project} 触发 {violation_count} 条政策违规"
+                            f"（{policy_preview.get('violations', [])}），"
+                            "综合图谱证据与先例比对后拒绝。"
                         ),
                         "outcome": "rejected",
                         "confidence": 0.9,
-                        "entities": case_data["project"],
+                        "entities": project,
                     },
                 ),
                 (
                     "text",
-                    "【离线确定性模拟运行】主席收口：综合分析师图谱证据与合规政策评估，"
-                    "拒绝 Project Aurora 的 500 万美元投资，待监管许可完成且客户集中度"
-                    "下降后重新评估。本段为无模型的确定性输出，不经过 DeepSeek 生成。",
+                    f"【离线确定性模拟运行】主席收口：综合分析师图谱证据与合规政策评估，"
+                    f"{project} 触发 {violation_count} 条政策违规，决定拒绝。"
+                    "本段为无模型的确定性输出，不经过 DeepSeek 生成。",
                 ),
             ],
             "scripted-chair",
@@ -958,6 +995,7 @@ def execute_demo(
     debug: bool = False,
     live: bool = False,
     committee: bool = False,
+    case_path: Path = DEFAULT_CASE_PATH,
 ) -> Tuple[Dict[str, Any], Any, ValidationResult]:
     """
     Seed the demo data, run (live DeepSeek or offline simulation), and
@@ -972,7 +1010,7 @@ def execute_demo(
         AgnoKGToolkit,
     )
 
-    case_data = load_case(DEFAULT_CASE_PATH)
+    case_data = load_case(case_path)
     context = build_context()
     kg_toolkit = AgnoKGToolkit(context=context)
     decision_toolkit = AgnoDecisionKit(context=context)
@@ -1038,11 +1076,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="print sanitized tool details and tracebacks",
     )
+    parser.add_argument(
+        "--case",
+        type=Path,
+        default=DEFAULT_CASE_PATH,
+        help="path to the case fixture JSON (default: Project Aurora)",
+    )
     args = parser.parse_args(argv)
 
     try:
         case_data, run_output, validation = execute_demo(
-            debug=args.debug, live=args.live, committee=args.committee
+            debug=args.debug, live=args.live, committee=args.committee,
+            case_path=args.case,
         )
     except DemoConfigurationError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)

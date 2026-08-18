@@ -1,0 +1,130 @@
+{
+  "project": "WeWork",
+  "category": "ipo_readiness",
+  "metadata": {
+    "expected_outcome": "rejected",
+    "scenario": "Backtest: WeWork's 2019 IPO attempt, evaluated on S-1 disclosures as of August 2019",
+    "sources": [
+      {
+        "claim": "2018 revenue $1.8B, 2018 net loss $1.6B (S-1, filed 2019-08-14)",
+        "url": "https://www.sec.gov/Archives/edgar/data/1533523/000119312519220499/d781982ds1.htm"
+      },
+      {
+        "claim": "Peak private valuation $47B (January 2019 SoftBank round); marketed valuation collapsed below $10B during the IPO process",
+        "url": "https://ibinterviewquestions.com/case-studies/wework-failed-ipo"
+      },
+      {
+        "claim": "SoftBank $9.5B rescue package (October 2019): $5B new financing + $1.5B acceleration + $3B tender offer",
+        "url": "https://oboe.com/learn/rise-and-fall-of-wework-qfo7ps/the-ipo-implosion-4"
+      },
+      {
+        "claim": "Adam Neumann super-voting shares, leased buildings he owned to WeWork, trademarked 'We' and licensed it to the company for $5.9M",
+        "url": "https://swimming-with-sharks.pages.dev/research/global_case_studies/"
+      },
+      {
+        "claim": "Neumann sold over $700M in personal stock before the IPO",
+        "url": "https://blog.startupstash.com/wework-the-47-billion-illusion-that-burned-through-capital-and-credibility-6c5768815496"
+      },
+      {
+        "claim": "Airbnb 2019 revenue $4.8B; 2019 net loss $674.3M (S-1)",
+        "url": "https://www.sec.gov/Archives/edgar/data/1559720/000119312520294801/d81668ds1.htm"
+      },
+      {
+        "claim": "Airbnb priced its IPO at $68 per share on 2020-12-09 and nearly doubled on debut",
+        "url": "https://www.foxbusiness.com/markets/airbnb-to-price-ipo-at-68-per-share-report"
+      },
+      {
+        "claim": "Blue Apron cut its IPO price from the $15-17 range to $10 (2017-06-29) and had never posted a profitable quarter",
+        "url": "https://www.cbinsights.com/research/blue-apron-valuation-history-2/"
+      }
+    ]
+  },
+  "entities": [
+    {
+      "name": "WeWork",
+      "type": "IPOCandidate",
+      "properties": {
+        "revenue_2018_usd": 1820000000,
+        "net_loss_2018_usd": 1610000000,
+        "net_loss_to_revenue": 0.885,
+        "peak_valuation_usd": 47000000000,
+        "governance_red_flags": 4,
+        "founder_super_voting": true,
+        "pre_ipo_insider_sales_usd": 700000000
+      }
+    },
+    {
+      "name": "Adam Neumann",
+      "type": "Executive",
+      "properties": {
+        "role": "CEO",
+        "super_voting_shares": true,
+        "related_party_transactions": true
+      }
+    },
+    {
+      "name": "SoftBank",
+      "type": "Investor",
+      "properties": {
+        "rescue_package_usd": 9500000000,
+        "post_rescue_valuation_usd": 8000000000
+      }
+    },
+    {
+      "name": "Flexible Office Market",
+      "type": "Market",
+      "properties": {
+        "structural_mismatch": "long-term leases funded by short-term memberships"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "source": "WeWork",
+      "relation": "CONTROLLED_BY",
+      "target": "Adam Neumann",
+      "properties": {"mechanism": "super-voting shares"}
+    },
+    {
+      "source": "WeWork",
+      "relation": "BACKED_BY",
+      "target": "SoftBank",
+      "properties": {"largest_backer": true}
+    },
+    {
+      "source": "WeWork",
+      "relation": "OPERATES_IN",
+      "target": "Flexible Office Market",
+      "properties": {"asset_liability_mismatch": true}
+    }
+  ],
+  "precedents": [
+    {
+      "category": "ipo_readiness",
+      "scenario": "Airbnb entered its 2020 IPO with $4.8B revenue (2019) and a $674M net loss — about 14% of revenue — with conventional governance and no founder self-dealing disclosures.",
+      "reasoning": "Losses were a manageable share of revenue and governance was clean; the IPO priced at $68 and nearly doubled on debut.",
+      "outcome": "approved",
+      "confidence": 0.88,
+      "entities": "Airbnb"
+    },
+    {
+      "category": "ipo_readiness",
+      "scenario": "Blue Apron went public in 2017 having never posted a profitable quarter, and had to cut its IPO price from the $15-17 range down to $10 amid persistent losses.",
+      "reasoning": "Chronic losses with no path to profitability destroyed pricing power; the stock kept falling after the downgraded debut.",
+      "outcome": "rejected",
+      "confidence": 0.86,
+      "entities": "Blue Apron"
+    }
+  ],
+  "policy_rules": [
+    "net_loss_to_revenue <= 0.5",
+    "governance_red_flags <= 1",
+    "confidence >= 0.75"
+  ],
+  "documents": [
+    "WeWork S-1 excerpt (financials): for the year ended December 31, 2018, the company reported revenue of approximately $1.82 billion and a net loss of approximately $1.61 billion — a loss equal to roughly 88% of revenue. The company was last valued privately at $47 billion in January 2019.",
+    "WeWork S-1 excerpt (governance): CEO Adam Neumann held super-voting shares giving him control over shareholder decisions. Disclosure items included leasing buildings he partly owned to the company, trademarking the word 'We' and licensing it to the company for $5.9 million, and personal stock sales of over $700 million prior to the IPO.",
+    "WeWork S-1 excerpt (business model): the company signs long-term leases (average 15 years) while selling short-term memberships, creating a structural asset-liability duration mismatch. Post-IPO-process, the marketed valuation collapsed below $10 billion, the IPO was withdrawn, and SoftBank assembled a $9.5 billion rescue at a valuation near $8 billion."
+  ],
+  "request_zh": "请评估 WeWork 在 2019 年是否应获准推进 IPO。必须基于图谱证据、历史先例和政策检查，并记录唯一的最终决定。"
+}
