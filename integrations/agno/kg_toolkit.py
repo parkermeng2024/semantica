@@ -210,51 +210,83 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
         Parameters
         ----------
         entities:
-            JSON list of ``{"name": str, "type": str}`` objects.
+            JSON list of ``{"name": str, "type": str, "properties": dict}``
+            objects.  ``properties`` is optional; when present its entries are
+            passed through to ``ContextGraph.add_node`` as node metadata.
         relations:
-            JSON list of ``{"source": str, "relation": str, "target": str}`` objects.
+            JSON list of ``{"source": str, "relation": str, "target": str,
+            "properties": dict}`` objects.  ``properties`` is optional; when
+            present its entries are passed through to
+            ``ContextGraph.add_edge`` as edge metadata.
 
         Returns
         -------
         str
-            JSON summary of nodes and edges added.
+            JSON summary ``{"nodes_added": int, "edges_added": int}``.  Only
+            successful writes are counted.  When any item fails, an ``error``
+            field lists every failure as ``entity '<name>': <error>`` /
+            ``relation '<source>-><target>': <error>`` entries.
         """
         nodes_added = 0
         edges_added = 0
+        errors: List[str] = []
 
         if entities:
             try:
                 ent_list = json.loads(entities) if isinstance(entities, str) else entities
-                for ent in ent_list:
-                    name = ent.get("name", str(ent))
-                    ntype = ent.get("type", "Entity")
-                    try:
-                        # ContextGraph.add_node(node_id, node_type, content=None, **props)
-                        self._graph.add_node(node_id=name, node_type=ntype)  # type: ignore[attr-defined]
-                        nodes_added += 1
-                    except Exception:
-                        pass
             except (json.JSONDecodeError, AttributeError) as exc:
                 logger.debug("add_to_graph entities parse error: %s", exc)
+                ent_list = []
+                errors.append(f"entities payload: {exc}")
+            for ent in ent_list:
+                name = ent.get("name", str(ent)) if isinstance(ent, dict) else str(ent)
+                try:
+                    ntype = ent.get("type", "Entity")
+                    props = ent.get("properties", {})
+                    if not isinstance(props, dict):
+                        raise TypeError("entity properties must be a JSON object")
+                    # ContextGraph.add_node(node_id, node_type, content=None, **props)
+                    added = self._graph.add_node(node_id=name, node_type=ntype, **props)  # type: ignore[attr-defined]
+                    if added is not False:
+                        nodes_added += 1
+                except Exception as exc:
+                    errors.append(f"entity '{name}': {exc}")
 
         if relations:
             try:
                 rel_list = json.loads(relations) if isinstance(relations, str) else relations
-                for rel in rel_list:
-                    src = rel.get("source", "")
-                    tgt = rel.get("target", "")
-                    rel_type = rel.get("relation", "related_to")
-                    try:
-                        # ContextGraph.add_edge(source_id, target_id, edge_type, **props)
-                        self._graph.add_edge(source_id=src, target_id=tgt, edge_type=rel_type)  # type: ignore[attr-defined]
-                        edges_added += 1
-                    except Exception:
-                        pass
             except (json.JSONDecodeError, AttributeError) as exc:
                 logger.debug("add_to_graph relations parse error: %s", exc)
+                rel_list = []
+                errors.append(f"relations payload: {exc}")
+            for rel in rel_list:
+                src = rel.get("source", "")
+                tgt = rel.get("target", "")
+                try:
+                    rel_type = rel.get("relation", "related_to")
+                    props = rel.get("properties", {})
+                    if not isinstance(props, dict):
+                        raise TypeError("relation properties must be a JSON object")
+                    # ContextGraph.add_edge(source_id, target_id, edge_type, **props)
+                    added = self._graph.add_edge(source_id=src, target_id=tgt, edge_type=rel_type, **props)  # type: ignore[attr-defined]
+                    if added is not False:
+                        edges_added += 1
+                except Exception as exc:
+                    errors.append(f"relation '{src}->{tgt}': {exc}")
 
-        logger.debug("add_to_graph: +%d nodes, +%d edges", nodes_added, edges_added)
-        return json.dumps({"nodes_added": nodes_added, "edges_added": edges_added})
+        logger.debug(
+            "add_to_graph: +%d nodes, +%d edges, %d errors",
+            nodes_added,
+            edges_added,
+            len(errors),
+        )
+        summary: Dict[str, Any] = {
+            "nodes_added": nodes_added,
+            "edges_added": edges_added,
+        }
+        if errors:
+            summary["error"] = "; ".join(errors)
+        return json.dumps(summary)
 
     def query_graph(self, query: str) -> str:
         """
@@ -273,7 +305,9 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
         Returns
         -------
         str
-            JSON list of matching nodes / records.
+            JSON list of matching nodes / records.  Keyword results contain
+            ``id``, ``label``, ``type``, and ``properties`` (the node's
+            metadata map).
         """
         try:
             if query.strip().upper().startswith("MATCH"):
@@ -296,13 +330,24 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
                 out = []
                 for n in (all_nodes or []):
                     if isinstance(n, dict):
-                        node_id = n.get("node_id", "")
-                        node_type = n.get("node_type", "")
+                        # Real ContextGraph shape: id/type/metadata; tolerate
+                        # the legacy node_id/node_type/properties shape.
+                        node_id = n.get("id", n.get("node_id", ""))
+                        node_type = n.get("type", n.get("node_type", ""))
+                        properties = n.get("metadata", n.get("properties", {})) or {}
                     else:
                         node_id = getattr(n, "id", getattr(n, "label", str(n)))
                         node_type = getattr(n, "node_type", "")
-                    if q_lower in node_id.lower() or q_lower in node_type.lower():
-                        out.append({"label": node_id, "type": node_type, "id": node_id})
+                        properties = getattr(n, "metadata", {}) or {}
+                    if q_lower in str(node_id).lower() or q_lower in str(node_type).lower():
+                        out.append(
+                            {
+                                "label": node_id,
+                                "type": node_type,
+                                "id": node_id,
+                                "properties": properties,
+                            }
+                        )
                 return json.dumps({"results": out, "count": len(out), "query_type": "keyword"})
         except Exception as exc:
             logger.warning("query_graph failed: %s", exc)

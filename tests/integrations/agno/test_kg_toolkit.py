@@ -53,24 +53,36 @@ class _FakeGraph:
     """Fake ContextGraph whose signatures match the real ContextGraph API."""
 
     def __init__(self):
-        self._node_store: dict = {}   # node_id -> {"node_id": ..., "node_type": ...}
+        self._node_store: dict = {}   # node_id -> {"id": ..., "type": ..., "metadata": ...}
         self._edge_store: list = []
 
     # ContextGraph.find_nodes(node_type=None) -> List[Dict]
     def find_nodes(self, node_type=None):
         nodes = list(self._node_store.values())
         if node_type:
-            nodes = [n for n in nodes if n.get("node_type") == node_type]
+            nodes = [n for n in nodes if n.get("type") == node_type]
         return nodes
 
     # ContextGraph.add_node(node_id, node_type, content=None, **props) -> bool
     def add_node(self, node_id, node_type="Entity", content=None, **props):
-        self._node_store[node_id] = {"node_id": node_id, "node_type": node_type}
+        self._node_store[node_id] = {
+            "id": node_id,
+            "type": node_type,
+            "content": content or node_id,
+            "metadata": dict(props),
+        }
         return True
 
     # ContextGraph.add_edge(source_id, target_id, edge_type, **props) -> bool
     def add_edge(self, source_id, target_id, edge_type="related_to", **props):
-        self._edge_store.append((source_id, target_id, edge_type))
+        self._edge_store.append(
+            {
+                "source": source_id,
+                "target": target_id,
+                "type": edge_type,
+                "metadata": dict(props),
+            }
+        )
         return True
 
     # ContextGraph.get_neighbors(node_id, hops=1, ...) -> List[Dict]
@@ -241,6 +253,57 @@ class TestAddToGraph(unittest.TestCase):
         self.assertEqual(result["nodes_added"], 0)
         self.assertEqual(result["edges_added"], 0)
 
+    def test_preserves_entity_and_relation_properties(self):
+        entities = json.dumps(
+            [
+                {
+                    "name": "Project Aurora",
+                    "type": "InvestmentCandidate",
+                    "properties": {"arr_usd": 12_000_000},
+                }
+            ]
+        )
+        relations = json.dumps(
+            [
+                {
+                    "source": "Project Aurora",
+                    "relation": "DEPENDS_ON",
+                    "target": "Acme Enterprise",
+                    "properties": {"revenue_share": 0.46},
+                }
+            ]
+        )
+        result = json.loads(self.kit.add_to_graph(entities=entities, relations=relations))
+        self.assertEqual(result, {"nodes_added": 1, "edges_added": 1})
+        self.assertEqual(
+            self.graph._node_store["Project Aurora"]["metadata"]["arr_usd"],
+            12_000_000,
+        )
+        self.assertEqual(self.graph._edge_store[0]["metadata"]["revenue_share"], 0.46)
+
+    def test_surfaces_backend_errors(self):
+        self.graph.add_node = MagicMock(side_effect=RuntimeError("write failed"))
+        result = json.loads(
+            self.kit.add_to_graph(entities='[{"name": "Project Aurora", "type": "Project"}]')
+        )
+        self.assertEqual(result["nodes_added"], 0)
+        self.assertIn("write failed", result["error"])
+
+    def test_counts_only_successful_writes(self):
+        def flaky_add(node_id, node_type="Entity", content=None, **props):
+            if node_id == "Bad":
+                raise RuntimeError("boom")
+            self.graph._node_store[node_id] = {"id": node_id, "type": node_type, "metadata": dict(props)}
+            return True
+
+        self.graph.add_node = flaky_add
+        entities = json.dumps(
+            [{"name": "Good", "type": "X"}, {"name": "Bad", "type": "X"}]
+        )
+        result = json.loads(self.kit.add_to_graph(entities=entities))
+        self.assertEqual(result["nodes_added"], 1)
+        self.assertIn("entity 'Bad'", result["error"])
+
 
 class TestQueryGraph(unittest.TestCase):
 
@@ -257,6 +320,19 @@ class TestQueryGraph(unittest.TestCase):
         result = json.loads(self.kit.query_graph("Tesla"))
         self.assertIn("results", result)
         self.assertEqual(result["query_type"], "keyword")
+
+    def test_keyword_query_returns_real_context_graph_shape_and_properties(self):
+        self.graph.add_node(
+            "Project Aurora",
+            "InvestmentCandidate",
+            customer_concentration=0.46,
+        )
+        result = json.loads(self.kit.query_graph("Project Aurora"))
+        self.assertEqual(result["count"], 1)
+        node = result["results"][0]
+        self.assertEqual(node["id"], "Project Aurora")
+        self.assertEqual(node["type"], "InvestmentCandidate")
+        self.assertEqual(node["properties"]["customer_concentration"], 0.46)
 
     def test_cypher_query_without_backend(self):
         result = json.loads(self.kit.query_graph("MATCH (n) RETURN n LIMIT 5"))
