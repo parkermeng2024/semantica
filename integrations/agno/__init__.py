@@ -35,10 +35,16 @@ directly to Agno ``Agent`` / ``Team`` constructors.
 
 from ._availability import AGNO_AVAILABLE, AGNO_IMPORT_ERROR
 from .context_store import AgnoContextStore
+from .decision_kit import AGNO_AVAILABLE as AGNO_DECISION_KIT_AVAILABLE
 from .decision_kit import AgnoDecisionKit
+from .kg_toolkit import AGNO_AVAILABLE as AGNO_KG_TOOLKIT_AVAILABLE
 from .kg_toolkit import AgnoKGToolkit
 from .knowledge_graph import AgnoKnowledgeGraph
 from .shared_context import AgnoSharedContext
+
+# Aggregate flag: both Toolkit integrations (kg_toolkit + decision_kit) are
+# importable and attachable to Agno ``Agent`` / ``Team`` constructors.
+AGNO_TOOLKITS_AVAILABLE = AGNO_DECISION_KIT_AVAILABLE and AGNO_KG_TOOLKIT_AVAILABLE
 
 __all__ = [
     "AgnoContextStore",
@@ -48,6 +54,7 @@ __all__ = [
     "AgnoSharedContext",
     "AGNO_AVAILABLE",
     "AGNO_IMPORT_ERROR",
+    "AGNO_TOOLKITS_AVAILABLE",
 ]
 
 __version__ = "1.0.0"
