@@ -319,3 +319,281 @@ def render_execution(
     print(f"\nDemo status: {'PASS' if validation.ok else 'FAIL'}", file=stream)
     for error in validation.errors:
         print(f"- {error}", file=stream)
+
+
+# ---------------------------------------------------------------------------
+# Agent construction (live mode) and deterministic offline simulation
+# ---------------------------------------------------------------------------
+def build_instructions(case_data: Dict[str, Any]) -> List[str]:
+    """Semi-constrained instructions that enforce the governed tool sequence."""
+    return [
+        "Respond in Chinese, but record the machine outcome in English.",
+        "Call query_graph for Project Aurora before making any recommendation.",
+        "Call find_related for Project Aurora with hops=2.",
+        "Call find_precedents with category investment_approval.",
+        "Create a candidate decision_data object containing category, outcome, "
+        "confidence, customer_concentration, and regulatory_clearance.",
+        f"Call check_policy exactly once with these rules: {json.dumps(case_data['policy_rules'])}.",
+        "If policy is not compliant, do not record outcome approved.",
+        "Call record_decision exactly once after policy evaluation.",
+        "The recorded outcome must be rejected or deferred_with_conditions.",
+        "Include the decision ID, confidence, graph evidence, precedent "
+        "comparison, and policy violations in the final answer.",
+    ]
+
+
+def _require_runtime() -> None:
+    """Validate the live-runtime prerequisites (API key + agno 2.9.x)."""
+    import os
+    from importlib.metadata import PackageNotFoundError, version
+
+    from packaging.version import Version
+
+    if not os.getenv("DEEPSEEK_API_KEY"):
+        raise DemoConfigurationError(
+            "DEEPSEEK_API_KEY is required for --live; export it before running the demo"
+        )
+    try:
+        installed = Version(version("agno"))
+    except PackageNotFoundError as exc:
+        raise DemoConfigurationError("Agno is not installed") from exc
+    if installed.release[:2] != (2, 9):
+        raise DemoConfigurationError(
+            f"Agno 2.9.x is required; installed version is {installed}"
+        )
+
+
+def build_agent(
+    kg_toolkit: Any,
+    decision_toolkit: Any,
+    context: AgentContext,
+    case_data: Dict[str, Any],
+    debug: bool = False,
+) -> Any:
+    """
+    Build the full-stack Agno 2.9 Agent: both Toolkits as ``tools``,
+    ``AgnoContextStore`` as ``db``, and ``AgnoKnowledgeGraph`` as
+    ``knowledge`` with the fixture's due-diligence documents ingested.
+    """
+    from agno.agent import Agent
+    from agno.models.deepseek import DeepSeek
+
+    from integrations.agno import AgnoContextStore, AgnoKnowledgeGraph
+
+    knowledge = AgnoKnowledgeGraph(context_graph=context.knowledge_graph)
+    knowledge.load(texts=list(case_data["documents"]))
+
+    model = DeepSeek(
+        id=MODEL_ID,
+        use_thinking=True,
+        max_retries=1,
+        timeout=60.0,
+    )
+    return Agent(
+        name="Semantica Investment Committee",
+        model=model,
+        tools=[kg_toolkit, decision_toolkit],
+        db=AgnoContextStore(knowledge_graph=context.knowledge_graph),
+        knowledge=knowledge,
+        instructions=build_instructions(case_data),
+        markdown=True,
+        debug_mode=debug,
+    )
+
+
+class _SimulatedTool:
+    """Deterministic stand-in for an Agno ``ToolExecution`` record."""
+
+    __slots__ = ("tool_name", "tool_args", "tool_call_error", "result")
+
+    def __init__(self, tool_name: str, tool_args: Dict[str, Any], result: str) -> None:
+        self.tool_name = tool_name
+        self.tool_args = tool_args
+        self.tool_call_error = False
+        self.result = result
+
+
+def _simulate_run(
+    case_data: Dict[str, Any],
+    kg_toolkit: Any,
+    decision_toolkit: Any,
+) -> Any:
+    """
+    Offline deterministic run: drives the real toolkits through the governed
+    sequence without a model, producing a ``RunOutput``-shaped object that
+    flows through the same ``validate_run`` / ``render_execution`` pipeline.
+    """
+    project = case_data["project"]
+    project_entity = next(
+        item for item in case_data["entities"] if item["name"] == project
+    )
+    props = project_entity["properties"]
+
+    tools: List[_SimulatedTool] = []
+
+    graph_args = {"query": project}
+    tools.append(_SimulatedTool("query_graph", graph_args, kg_toolkit.query_graph(**graph_args)))
+
+    related_args = {"entity": project, "hops": 2}
+    tools.append(_SimulatedTool("find_related", related_args, kg_toolkit.find_related(**related_args)))
+
+    precedent_args = {
+        "scenario": f"{project} investment review",
+        "category": case_data["category"],
+    }
+    tools.append(
+        _SimulatedTool(
+            "find_precedents",
+            precedent_args,
+            decision_toolkit.find_precedents(**precedent_args),
+        )
+    )
+
+    decision_data = {
+        "category": case_data["category"],
+        "outcome": "rejected",
+        "confidence": 0.9,
+        "customer_concentration": props["customer_concentration"],
+        "regulatory_clearance": props["regulatory_clearance"],
+    }
+    policy_args = {
+        "decision_data": json.dumps(decision_data),
+        "policy_rules": json.dumps(case_data["policy_rules"]),
+    }
+    policy_raw = decision_toolkit.check_policy(**policy_args)
+    tools.append(_SimulatedTool("check_policy", policy_args, policy_raw))
+
+    policy_result = json.loads(policy_raw)
+    outcome = "rejected" if not policy_result.get("compliant", True) else "approved"
+    record_args = {
+        "category": case_data["category"],
+        "scenario": f"{project} investment review",
+        "reasoning": (
+            "Deterministic offline run: customer_concentration="
+            f"{props['customer_concentration']}, regulatory_clearance="
+            f"{props['regulatory_clearance']} → policy compliant="
+            f"{policy_result.get('compliant')}."
+        ),
+        "outcome": outcome,
+        "confidence": 0.9,
+        "entities": project,
+    }
+    tools.append(
+        _SimulatedTool(
+            "record_decision",
+            record_args,
+            decision_toolkit.record_decision(**record_args),
+        )
+    )
+
+    content = (
+        f"【离线确定性模拟运行】基于图谱证据与先例对比，{project} 客户集中度 "
+        f"{props['customer_concentration']:.0%}（上限 35%），监管许可状态为"
+        f"「{'已获批' if props['regulatory_clearance'] else '待批'}」，违反两条政策红线。"
+        f"建议：{('拒绝投资，待监管许可完成且客户集中度下降后重新评估。' if outcome == 'rejected' else '批准投资。')}"
+        "本段为无模型的确定性输出，不经过 DeepSeek 生成。"
+    )
+    return SimpleNamespaceShim(content=content, tools=tools)
+
+
+class SimpleNamespaceShim:
+    """Minimal RunOutput-shaped object (content + tools)."""
+
+    __slots__ = ("content", "tools")
+
+    def __init__(self, content: str, tools: List[_SimulatedTool]) -> None:
+        self.content = content
+        self.tools = tools
+
+
+# ---------------------------------------------------------------------------
+# Orchestration and CLI
+# ---------------------------------------------------------------------------
+def execute_demo(
+    debug: bool = False,
+    live: bool = False,
+) -> Tuple[Dict[str, Any], Any, ValidationResult]:
+    """
+    Seed the demo data, run (live DeepSeek or offline simulation), and
+    validate the governed trace.  Returns the case data, the run output,
+    and the validation result.
+    """
+    from integrations.agno import (
+        AGNO_TOOLKITS_AVAILABLE,
+        AgnoDecisionKit,
+        AgnoKGToolkit,
+    )
+
+    case_data = load_case(DEFAULT_CASE_PATH)
+    context = build_context()
+    kg_toolkit = AgnoKGToolkit(context=context)
+    decision_toolkit = AgnoDecisionKit(context=context)
+    seed_demo_data(case_data, kg_toolkit, decision_toolkit)
+
+    if live:
+        _require_runtime()
+        if not AGNO_TOOLKITS_AVAILABLE:
+            raise DemoConfigurationError("Agno 2.9 Toolkit integration is unavailable")
+        agent = build_agent(kg_toolkit, decision_toolkit, context, case_data, debug=debug)
+        try:
+            run_output = agent.run(case_data["request_zh"], stream=False)
+        except Exception as exc:
+            raise DemoModelError(
+                f"DeepSeek request failed: {type(exc).__name__}"
+            ) from exc
+    else:
+        run_output = _simulate_run(case_data, kg_toolkit, decision_toolkit)
+
+    validation = validate_run(run_output, context)
+    return case_data, run_output, validation
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """CLI entry point.  Exit codes: 0 pass, 2 config, 3 model, 4 governance."""
+    parser = argparse.ArgumentParser(
+        description="Agno 2.9 + Semantica investment committee demo",
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="run against the real DeepSeek API (requires DEEPSEEK_API_KEY)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="print sanitized tool details and tracebacks",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        case_data, run_output, validation = execute_demo(debug=args.debug, live=args.live)
+    except DemoConfigurationError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        if args.debug:
+            import traceback
+
+            traceback.print_exc()
+        return 2
+    except DemoModelError as exc:
+        print(f"Model error: {exc}", file=sys.stderr)
+        if args.debug:
+            import traceback
+
+            traceback.print_exc()
+        return 3
+    except DemoValidationError as exc:
+        print(f"Validation error: {exc}", file=sys.stderr)
+        if args.debug:
+            import traceback
+
+            traceback.print_exc()
+        return 4
+
+    render_execution(case_data, run_output, validation, stream=sys.stdout, debug=args.debug)
+    if not validation.ok:
+        return 4
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

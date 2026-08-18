@@ -161,3 +161,74 @@ def test_render_execution_prints_model_and_audit_sections():
     assert "Semantica 审计记录" in text
     assert "Sanitized tool details" in text
     assert decision_id in text
+
+
+# ---------------------------------------------------------------------------
+# build_instructions / CLI contract
+# ---------------------------------------------------------------------------
+from examples.agno_29_investment_demo import (  # noqa: E402
+    ValidationResult,
+    build_instructions,
+    execute_demo,
+    main,
+)
+
+
+def test_instructions_require_governed_tool_sequence():
+    instructions = "\n".join(build_instructions(load_case(DEFAULT_CASE_PATH)))
+    for tool_name in (
+        "query_graph",
+        "find_related",
+        "find_precedents",
+        "check_policy",
+        "record_decision",
+    ):
+        assert tool_name in instructions
+    assert "exactly once" in instructions
+    assert "rejected" in instructions
+    assert "deferred_with_conditions" in instructions
+
+
+def test_offline_simulated_run_passes_validation():
+    case_data, run_output, validation = execute_demo(live=False)
+    assert case_data["project"] == "Project Aurora"
+    assert validation.ok is True, validation.errors
+    assert validation.audit_record["metadata"]["outcome"] in {
+        "rejected",
+        "deferred_with_conditions",
+    }
+    names = [tool.tool_name for tool in run_output.tools]
+    assert names.count("check_policy") == 1
+    assert names.count("record_decision") == 1
+
+
+def test_main_returns_0_offline_without_api_key(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    assert main([]) == 0
+
+
+def test_main_returns_2_for_live_without_api_key(monkeypatch, capsys):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    assert main(["--live"]) == 2
+    captured = capsys.readouterr()
+    assert "DEEPSEEK_API_KEY" in captured.err
+
+
+def test_main_returns_4_for_validation_failure(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-not-logged")
+    failed = ValidationResult(
+        ok=False,
+        errors=("missing tool",),
+        decision_id=None,
+        policy_result={},
+        audit_record=None,
+    )
+    with patch(
+        "examples.agno_29_investment_demo.execute_demo",
+        return_value=(
+            load_case(DEFAULT_CASE_PATH),
+            SimpleNamespace(content="", tools=[]),
+            failed,
+        ),
+    ):
+        assert main([]) == 4
