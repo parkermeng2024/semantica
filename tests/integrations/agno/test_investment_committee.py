@@ -162,3 +162,15 @@ def test_render_execution_groups_committee_trace_by_role():
     assert "合规 Agent（compliance）" in text
     assert "主席收口（chair）" in text
     assert decision_id in text
+
+
+def test_validate_team_run_ignores_builtin_tool_results():
+    context = build_context()
+    decision_id = _record_decision(context)
+    run = _team_run(decision_id)
+    run.tools.insert(
+        0,
+        _tool("search_knowledge_base", "prose, not json"),
+    )
+    result = validate_team_run(run, context)
+    assert result.ok is True, result.errors

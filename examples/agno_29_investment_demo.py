@@ -228,6 +228,33 @@ def validate_run(run_output: Any, context: AgentContext) -> ValidationResult:
     )
 
 
+#: Governance evidence tools — the seven ``AgnoKGToolkit`` tools plus the six
+#: ``AgnoDecisionKit`` tools.  Only these are required to return JSON objects
+#: without an ``error`` field; anything else in the trace (Agno built-ins such
+#: as ``search_knowledge_base`` or ``delegate_task_to_member``) is
+#: orchestration plumbing whose results may be prose, so it is only checked
+#: for ``tool_call_error``.
+GOVERNANCE_TOOLS = frozenset(
+    {
+        # AgnoKGToolkit
+        "extract_entities",
+        "extract_relations",
+        "add_to_graph",
+        "query_graph",
+        "find_related",
+        "infer_facts",
+        "export_subgraph",
+        # AgnoDecisionKit
+        "record_decision",
+        "find_precedents",
+        "trace_causal_chain",
+        "analyze_impact",
+        "check_policy",
+        "get_decision_summary",
+    }
+)
+
+
 def _collect_tool_results(
     tools: List[Any],
     errors: List[str],
@@ -236,7 +263,7 @@ def _collect_tool_results(
     """
     Count tool calls and harvest the policy / decision results from a tool
     trace.  ``prefix`` scopes error messages to a committee role (empty for
-    single-Agent runs).
+    single-Agent runs).  Only ``GOVERNANCE_TOOLS`` are JSON-validated.
     """
     counts: Dict[str, int] = {}
     policy_result: Dict[str, Any] = {}
@@ -248,9 +275,9 @@ def _collect_tool_results(
         if getattr(tool, "tool_call_error", False):
             errors.append(f"{prefix}tool call failed: {name}")
             continue
-        if name == "delegate_task_to_member":
-            # Agno orchestration plumbing, not governance evidence — its
-            # result is the member's prose answer, not toolkit JSON.
+        if name not in GOVERNANCE_TOOLS:
+            # Agno built-in / orchestration plumbing, not governance
+            # evidence — its result may be prose, not toolkit JSON.
             continue
         try:
             result = json.loads(getattr(tool, "result", "") or "")
@@ -483,7 +510,9 @@ def build_instructions(case_data: Dict[str, Any]) -> List[str]:
     """Semi-constrained instructions that enforce the governed tool sequence."""
     return [
         "Respond in Chinese, but record the machine outcome in English.",
-        "Call query_graph for Project Aurora before making any recommendation.",
+        "Call query_graph for Project Aurora before making any recommendation. "
+        "query_graph accepts plain natural-language keywords only — never "
+        "pass Cypher (no MATCH clauses); Cypher is not supported here.",
         "Call find_related for Project Aurora with hops=2.",
         "Call find_precedents with category investment_approval.",
         "Create a candidate decision_data object containing category, outcome, "

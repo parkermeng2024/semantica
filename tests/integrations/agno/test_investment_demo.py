@@ -232,3 +232,40 @@ def test_main_returns_4_for_validation_failure(monkeypatch):
         ),
     ):
         assert main([]) == 4
+
+
+def test_validate_run_ignores_agno_builtin_tool_results():
+    """Agno built-ins (e.g. search_knowledge_base) return prose, not JSON —
+    they must not trip the governance JSON validation."""
+    context = build_context()
+    decision_id = _record_decision(context)
+    run = _successful_run(decision_id)
+    run.tools.insert(
+        0,
+        SimpleNamespace(
+            tool_name="search_knowledge_base",
+            tool_args={"query": "Project Aurora due diligence"},
+            tool_call_error=False,
+            result="Project Aurora due diligence excerpt 1: the company reports…",
+        ),
+    )
+    result = validate_run(run, context)
+    assert result.ok is True, result.errors
+
+
+def test_validate_run_still_flags_builtin_tool_call_errors():
+    context = build_context()
+    decision_id = _record_decision(context)
+    run = _successful_run(decision_id)
+    run.tools.insert(
+        0,
+        SimpleNamespace(
+            tool_name="search_knowledge_base",
+            tool_args={},
+            tool_call_error=True,
+            result="",
+        ),
+    )
+    result = validate_run(run, context)
+    assert result.ok is False
+    assert "tool call failed: search_knowledge_base" in result.errors
