@@ -29,27 +29,52 @@ export_subgraph    — Export a subgraph as JSON-LD / RDF Turtle
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from semantica.utils.logging import get_logger
 
+from ._availability import AGNO_AVAILABLE, AGNO_IMPORT_ERROR  # noqa: F401
+
 logger = get_logger(__name__)
+
+
+def _coerce_json(value: Any, expected_type: type, param: str) -> Any:
+    """
+    Accept a JSON string or an already-decoded object for a tool parameter.
+
+    Models frequently pass structured objects where the schema says string
+    (and vice versa); both forms are normalised here.  ``expected_type`` is
+    the required decoded type (``dict`` or ``list``).  Raises ``ValueError``
+    with an actionable message when the value cannot be normalised.
+    """
+    expected_name = "object" if expected_type is dict else "array"
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid {param} JSON: {exc} — {param} must be a JSON "
+                f"{expected_name} or a valid JSON string"
+            ) from exc
+    else:
+        decoded = value
+    if not isinstance(decoded, expected_type):
+        raise TypeError(
+            f"{param} must be a JSON {expected_name} "
+            f"(or a JSON string encoding one), got {type(decoded).__name__}"
+        )
+    return decoded
+
 
 # ---------------------------------------------------------------------------
 # Optional: Agno Toolkit base class
 # ---------------------------------------------------------------------------
-AGNO_AVAILABLE = False
-AGNO_IMPORT_ERROR: Optional[str] = None
-
 _ToolkitBase: Any = object
 
-try:
+if AGNO_AVAILABLE:
     from agno.tools.toolkit import Toolkit as _AgnoToolkit  # type: ignore
 
     _ToolkitBase = _AgnoToolkit
-    AGNO_AVAILABLE = True
-except ImportError as exc:
-    AGNO_IMPORT_ERROR = str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +188,9 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
             logger.warning("extract_entities failed: %s", exc)
             return json.dumps({"entities": [], "count": 0, "error": str(exc)})
 
-    def extract_relations(self, text: str, entities: Optional[str] = None) -> str:
+    def extract_relations(
+        self, text: str, entities: Optional[Union[str, List[str]]] = None
+    ) -> str:
         """
         Extract relationships between entities in the given text.
 
@@ -172,7 +199,9 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
         text:
             Input text to analyse.
         entities:
-            Optional JSON list of entity names to restrict extraction to.
+            Optional entity names to restrict extraction to — a JSON list of
+            strings, a comma-separated string, or a JSON string encoding a
+            list; all forms are accepted.
 
         Returns
         -------
@@ -181,10 +210,13 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
         """
         entity_list: Optional[List[str]] = None
         if entities:
-            try:
-                entity_list = json.loads(entities)
-            except json.JSONDecodeError:
-                entity_list = [e.strip() for e in entities.split(",") if e.strip()]
+            if isinstance(entities, list):
+                entity_list = [str(e).strip() for e in entities if str(e).strip()]
+            else:
+                try:
+                    entity_list = json.loads(entities)
+                except json.JSONDecodeError:
+                    entity_list = [e.strip() for e in entities.split(",") if e.strip()]
 
         try:
             raw = self._rel.extract_relations(text, entities=entity_list) or []
@@ -205,8 +237,8 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
 
     def add_to_graph(
         self,
-        entities: Optional[str] = None,
-        relations: Optional[str] = None,
+        entities: Optional[Union[str, List[Dict[str, Any]], Dict[str, Any]]] = None,
+        relations: Optional[Union[str, List[Dict[str, Any]], Dict[str, Any]]] = None,
     ) -> str:
         """
         Add entities and/or relations to the active context graph.
@@ -214,70 +246,107 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
         Parameters
         ----------
         entities:
-            JSON list of ``{"name": str, "type": str}`` objects.
+            A JSON list of ``{"name": str, "type": str, "properties": dict}``
+            objects, a single such object, or a JSON string encoding either —
+            all forms are accepted.  ``properties`` is optional; when present
+            its entries are passed through to ``ContextGraph.add_node`` as
+            node metadata.
         relations:
-            JSON list of ``{"source": str, "relation": str, "target": str}`` objects.
+            A JSON list of ``{"source": str, "relation": str, "target": str,
+            "properties": dict}`` objects, a single such object, or a JSON
+            string encoding either — all forms are accepted.  ``properties``
+            is optional; when present its entries are passed through to
+            ``ContextGraph.add_edge`` as edge metadata.
 
         Returns
         -------
         str
-            JSON summary of nodes and edges added.
+            JSON summary ``{"nodes_added": int, "edges_added": int}``.  Only
+            successful writes are counted.  When any item fails, an ``error``
+            field lists every failure as ``entity '<name>': <error>`` /
+            ``relation '<source>-><target>': <error>`` entries.
         """
         nodes_added = 0
         edges_added = 0
+        errors: List[str] = []
 
         if entities:
             try:
-                ent_list = json.loads(entities) if isinstance(entities, str) else entities
-                for ent in ent_list:
-                    name = ent.get("name", str(ent))
-                    ntype = ent.get("type", "Entity")
-                    try:
-                        # ContextGraph.add_node(node_id, node_type, content=None, **props)
-                        self._graph.add_node(node_id=name, node_type=ntype)  # type: ignore[attr-defined]
-                        nodes_added += 1
-                    except Exception:
-                        pass
-            except (json.JSONDecodeError, AttributeError) as exc:
+                ent_list = [entities] if isinstance(entities, dict) else _coerce_json(entities, list, "entities")
+            except (ValueError, TypeError) as exc:
                 logger.debug("add_to_graph entities parse error: %s", exc)
+                ent_list = []
+                errors.append(str(exc))
+            for ent in ent_list:
+                name = ent.get("name", str(ent)) if isinstance(ent, dict) else str(ent)
+                try:
+                    ntype = ent.get("type", "Entity")
+                    props = ent.get("properties", {})
+                    if not isinstance(props, dict):
+                        raise TypeError("entity properties must be a JSON object")
+                    # ContextGraph.add_node(node_id, node_type, content=None, **props)
+                    added = self._graph.add_node(node_id=name, node_type=ntype, **props)  # type: ignore[attr-defined]
+                    if added is not False:
+                        nodes_added += 1
+                except Exception as exc:
+                    errors.append(f"entity '{name}': {exc}")
 
         if relations:
             try:
-                rel_list = json.loads(relations) if isinstance(relations, str) else relations
-                for rel in rel_list:
-                    src = rel.get("source", "")
-                    tgt = rel.get("target", "")
-                    rel_type = rel.get("relation", "related_to")
-                    try:
-                        # ContextGraph.add_edge(source_id, target_id, edge_type, **props)
-                        self._graph.add_edge(source_id=src, target_id=tgt, edge_type=rel_type)  # type: ignore[attr-defined]
-                        edges_added += 1
-                    except Exception:
-                        pass
-            except (json.JSONDecodeError, AttributeError) as exc:
+                rel_list = [relations] if isinstance(relations, dict) else _coerce_json(relations, list, "relations")
+            except (ValueError, TypeError) as exc:
                 logger.debug("add_to_graph relations parse error: %s", exc)
+                rel_list = []
+                errors.append(str(exc))
+            for rel in rel_list:
+                src = rel.get("source", "")
+                tgt = rel.get("target", "")
+                try:
+                    rel_type = rel.get("relation", "related_to")
+                    props = rel.get("properties", {})
+                    if not isinstance(props, dict):
+                        raise TypeError("relation properties must be a JSON object")
+                    # ContextGraph.add_edge(source_id, target_id, edge_type, **props)
+                    added = self._graph.add_edge(source_id=src, target_id=tgt, edge_type=rel_type, **props)  # type: ignore[attr-defined]
+                    if added is not False:
+                        edges_added += 1
+                except Exception as exc:
+                    errors.append(f"relation '{src}->{tgt}': {exc}")
 
-        logger.debug("add_to_graph: +%d nodes, +%d edges", nodes_added, edges_added)
-        return json.dumps({"nodes_added": nodes_added, "edges_added": edges_added})
+        logger.debug(
+            "add_to_graph: +%d nodes, +%d edges, %d errors",
+            nodes_added,
+            edges_added,
+            len(errors),
+        )
+        summary: Dict[str, Any] = {
+            "nodes_added": nodes_added,
+            "edges_added": edges_added,
+        }
+        if errors:
+            summary["error"] = "; ".join(errors)
+        return json.dumps(summary)
 
     def query_graph(self, query: str) -> str:
         """
-        Query the context graph in natural language or Cypher.
+        Query the context graph with a plain natural-language keyword.
 
-        For natural-language queries all nodes are retrieved and filtered by
-        whether ``query`` appears in their ``node_id``.  Pass a string starting
-        with ``"MATCH"`` for raw Cypher execution (requires a Neo4j / FalkorDB
-        backend).
+        IMPORTANT: pass a short keyword or entity name (e.g. "Project
+        Aurora") — NOT a Cypher query.  Cypher (``MATCH ...``) is not
+        supported in this deployment and will be rejected; always use the
+        keyword form.  The query matches nodes whose id or type contains it.
 
         Parameters
         ----------
         query:
-            Search query string.
+            Natural-language keyword or entity name (never Cypher).
 
         Returns
         -------
         str
-            JSON list of matching nodes / records.
+            JSON list of matching nodes / records.  Keyword results contain
+            ``id``, ``label``, ``type``, and ``properties`` (the node's
+            metadata map).
         """
         try:
             if query.strip().upper().startswith("MATCH"):
@@ -300,13 +369,24 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
                 out = []
                 for n in (all_nodes or []):
                     if isinstance(n, dict):
-                        node_id = n.get("node_id", "")
-                        node_type = n.get("node_type", "")
+                        # Real ContextGraph shape: id/type/metadata; tolerate
+                        # the legacy node_id/node_type/properties shape.
+                        node_id = n.get("id", n.get("node_id", ""))
+                        node_type = n.get("type", n.get("node_type", ""))
+                        properties = n.get("metadata", n.get("properties", {})) or {}
                     else:
                         node_id = getattr(n, "id", getattr(n, "label", str(n)))
                         node_type = getattr(n, "node_type", "")
-                    if q_lower in node_id.lower() or q_lower in node_type.lower():
-                        out.append({"label": node_id, "type": node_type, "id": node_id})
+                        properties = getattr(n, "metadata", {}) or {}
+                    if q_lower in str(node_id).lower() or q_lower in str(node_type).lower():
+                        out.append(
+                            {
+                                "label": node_id,
+                                "type": node_type,
+                                "id": node_id,
+                                "properties": properties,
+                            }
+                        )
                 return json.dumps({"results": out, "count": len(out), "query_type": "keyword"})
         except Exception as exc:
             logger.warning("query_graph failed: %s", exc)
@@ -358,35 +438,42 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
             logger.warning("find_related failed: %s", exc)
             return json.dumps({"entity": entity, "related": [], "error": str(exc)})
 
-    def infer_facts(self, rules: str, facts: Optional[str] = None) -> str:
+    def infer_facts(self, rules: Union[str, List[str]], facts: Optional[Union[str, List[str]]] = None) -> str:
         """
         Apply inference rules to the graph and return newly derived facts.
 
         Parameters
         ----------
         rules:
-            JSON list of rule strings, e.g.
-            ``'["IF Person(?x) THEN Human(?x)"]'``
+            Inference rules — a JSON list of strings, a comma-separated
+            string, or a JSON string encoding a list; all forms accepted,
+            e.g. ``'["IF Person(?x) THEN Human(?x)"]'``.
         facts:
-            Optional JSON list of additional fact strings to load before
-            inference.  When ``None``, the current graph state is used.
+            Optional additional facts to load before inference — same accepted
+            forms as ``rules``.  When ``None``, the current graph state is used.
 
         Returns
         -------
         str
             JSON list of inferred fact strings.
         """
-        try:
-            rule_list: List[str] = json.loads(rules) if rules else []
-        except json.JSONDecodeError:
-            rule_list = [r.strip() for r in rules.split(",") if r.strip()]
+        if isinstance(rules, list):
+            rule_list = [str(r).strip() for r in rules if str(r).strip()]
+        else:
+            try:
+                rule_list = json.loads(rules) if rules else []
+            except json.JSONDecodeError:
+                rule_list = [r.strip() for r in rules.split(",") if r.strip()]
 
         fact_list: List[str] = []
         if facts:
-            try:
-                fact_list = json.loads(facts)
-            except json.JSONDecodeError:
-                fact_list = [f.strip() for f in facts.split(",") if f.strip()]
+            if isinstance(facts, list):
+                fact_list = [str(f).strip() for f in facts if str(f).strip()]
+            else:
+                try:
+                    fact_list = json.loads(facts)
+                except json.JSONDecodeError:
+                    fact_list = [f.strip() for f in facts.split(",") if f.strip()]
 
         if not fact_list:
             # Derive facts from graph nodes via the public API

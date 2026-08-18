@@ -6,6 +6,51 @@ icon: "robot"
 
 > Five drop-in components that bring Semantica's KG, vector memory, and decision intelligence into any Agno agent or team.
 
+Requires **agno ≥ 2.9** (the v2 API — agno v1 is not supported). All five components are **Agno 2.9 native**: no legacy adapters, no compatibility shims — each one subclasses the real v2 base class (`Toolkit`, `BaseDb`, `Knowledge`) and can be passed directly to Agno 2.9 `Agent` / `Team` constructors.
+
+## Full-Stack Investment Demo
+
+A single CLI demo wires **all five components** into one governed investment review: an Agno `Agent` powered by `deepseek-v4-pro` evaluates the Project Aurora case with `tools=[AgnoKGToolkit, AgnoDecisionKit]`, `db=AgnoContextStore`, and `knowledge=AgnoKnowledgeGraph` (the fixture's due-diligence documents are ingested as GraphRAG).
+
+```bash
+pip install -e ".[agno,llm-openai]"
+
+# Offline deterministic run — no API key needed, exercises the full
+# seed → validate → render governance pipeline:
+python examples/agno_29_investment_demo.py
+
+# Live run against the real DeepSeek API:
+export DEEPSEEK_API_KEY="your-key"
+python examples/agno_29_investment_demo.py --live
+```
+
+The CLI queries Project Aurora's context graph, compares historical investment precedents, evaluates policy gates, and records exactly one auditable final decision. Exit codes: `0` governed PASS, `2` configuration error, `3` model error, `4` governance/validation failure. Add `--debug` for sanitized tool details (never includes keys, headers, or request payloads).
+
+### Committee mode (multi-Agent Team)
+
+Add `--committee` to upgrade the demo from one Agent to an Agno `Team` (coordinate mode) — an **analyst** Agent (graph evidence + precedents), a **compliance** Agent (policy gates), and a **chair** leader who delegates to both and records the single final decision:
+
+```bash
+python examples/agno_29_investment_demo.py --committee          # offline, deterministic
+python examples/agno_29_investment_demo.py --committee --live   # real DeepSeek run
+```
+
+Both members share one `ContextGraph` through `AgnoSharedContext`, each getting a role-scoped view via `bind_agent()`:
+
+```python
+from integrations.agno import AgnoSharedContext
+
+shared = AgnoSharedContext(
+    vector_store=context.vector_store,
+    knowledge_graph=context.knowledge_graph,
+    decision_tracking=True,
+)
+analyst = Agent(name="analyst", tools=[kg_toolkit], db=shared.bind_agent("analyst"), ...)
+compliance = Agent(name="compliance", tools=[policy_kit], db=shared.bind_agent("compliance"), ...)
+team = Team(members=[analyst, compliance], tools=[chair_kit], mode="coordinate", ...)
+```
+
+Governance validation is team-level: the validator aggregates the chair's own tools with every member's tools from `TeamRunOutput.member_responses` and asserts that `record_decision` and `check_policy` each fire **exactly once across the whole team**, with errors attributed to the responsible role (`analyst:`, `compliance:`, `chair:`).
 
 ## Installation
 
@@ -24,7 +69,7 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
 
 ## Components at a Glance
 
-- **AgnoContextStore** — `AgentMemory(db=…)`: Replaces Agno's flat storage with hybrid vector + context graph memory. Adds decision tracking and precedent search to any agent.
+- **AgnoContextStore** — `Agent(db=…)`: Replaces Agno's flat storage with hybrid vector + context graph memory. Adds decision tracking and precedent search to any agent.
 - **AgnoKnowledgeGraph** — `Agent(knowledge=…)`: Documents flow through the full Semantica extraction pipeline into a queryable `ContextGraph` with multi-hop GraphRAG.
 - **AgnoDecisionKit** — `Agent(tools=[…])`: 6 decision intelligence tools: record decisions, find precedents, trace causal chains, analyze impact, check policies, summarize history.
 - **AgnoKGToolkit** — `Agent(tools=[…])`: 7 KG construction tools: extract entities, extract relations, add to graph, query graph, find related, infer facts, export subgraph.
@@ -35,11 +80,10 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
 
 <Tabs>
   <Tab title="AgnoContextStore">
-    Replaces Agno's flat conversation storage with a hybrid **vector + context graph** memory store. Implements `agno.memory.db.base.MemoryDb`.
+    Replaces Agno's flat conversation storage with a hybrid **vector + context graph** memory store. Implements `agno.db.base.BaseDb` (the v2 storage interface). Only the **UserMemory** group is backed by Semantica storage; the other `BaseDb` groups (sessions, metrics, evals, traces, …) raise `NotImplementedError`, which Agno safely degrades to a logged warning.
 
     ```python
     from agno.agent import Agent
-    from agno.memory import AgentMemory
     from agno.models.openai import OpenAIChat
     from semantica.context import ContextGraph
     from semantica.vector_store import VectorStore
@@ -50,25 +94,25 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
         knowledge_graph=ContextGraph(advanced_analytics=True),
         decision_tracking=True,
         graph_expansion=True,
-        session_id="user_session_42",
     )
 
     agent = Agent(
         model=OpenAIChat(id="gpt-4o"),
-        memory=AgentMemory(db=store),
+        db=store,
+        update_memory_on_run=True,
         description="A financially aware assistant with persistent decision intelligence.",
     )
     ```
 
     | Method | Description |
     | :-------- | :------------- |
-    | `upsert_memory()` | Store text in `AgentContext` (vector index + graph node) |
-    | `read_memories()` | Hybrid retrieval: vector similarity + graph hop expansion |
+    | `upsert_user_memory()` | Store text in `AgentContext` (vector index + graph node) |
+    | `get_user_memories()` | Filtered / sorted / paginated memory reads |
     | `record_decision()` | Record a structured decision with reasoning and outcome |
     | `find_precedents()` | Return semantically similar historical decisions |
   </Tab>
   <Tab title="AgnoKnowledgeGraph">
-    Gives Agno agents a queryable `ContextGraph` instead of a flat document store. Ingested documents pass through the full Semantica extraction pipeline.
+    Gives Agno agents a queryable `ContextGraph` instead of a flat document store. Subclasses `agno.knowledge.knowledge.Knowledge` (v2) — ingested documents pass through the full Semantica extraction pipeline.
 
     ```python
     from agno.agent import Agent
@@ -83,8 +127,8 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
         relation_extractor=RelationExtractor(),
     )
 
-    kg.load("regulatory_docs/", recursive=True)
-    kg.load(texts=["Basel IV capital requirements apply from January 2026."])
+    kg.insert(path="regulatory_docs/", include=["*.txt"])
+    kg.insert(text_content="Basel IV capital requirements apply from January 2026.")
 
     agent = Agent(model=OpenAIChat(id="gpt-4o"), knowledge=kg, search_knowledge=True)
     ```
@@ -94,7 +138,8 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
     **Search:** `vector retrieval → entity lookup → graph hop expansion → context injection`
 
     ```python
-    ctx = kg.get_graph_context("Basel IV")
+    docs = kg.search("Basel IV capital requirements", max_results=5)
+    ctx  = kg.get_graph_context("Basel IV")
     # Returns a text summary of the entity's immediate neighbourhood
     ```
   </Tab>
@@ -153,9 +198,11 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
   <Tab title="AgnoSharedContext">
     A single `ContextGraph` shared across an Agno `Team`. Each agent gets a role-scoped view via `bind_agent()`. Writes are tagged by role.
 
+    Both the shared context and every role-scoped store expose the full `AgentContext` decision protocol (`record_decision`, `find_precedents_advanced`, `analyze_decision_influence`, `get_context_insights`, `knowledge_graph`), so `AgnoDecisionKit` and `AgnoKGToolkit` can attach to either one directly. Decisions recorded through a scoped store are tagged `"<category>:<role>"`.
+
     ```python
     from agno.agent import Agent
-    from agno.team import Team
+    from agno.team.team import Team
     from agno.models.openai import OpenAIChat
     from semantica.context import ContextGraph
     from semantica.vector_store import VectorStore
@@ -170,20 +217,22 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
     research_agent = Agent(
         name="Researcher",
         model=OpenAIChat(id="gpt-4o"),
-        memory=shared.bind_agent("researcher"),
+        db=shared.bind_agent("researcher"),
+        update_memory_on_run=True,
         tools=[AgnoKGToolkit(context=shared)],
     )
     decision_agent = Agent(
         name="Analyst",
         model=OpenAIChat(id="gpt-4o"),
-        memory=shared.bind_agent("analyst"),
+        db=shared.bind_agent("analyst"),
+        update_memory_on_run=True,
         tools=[AgnoDecisionKit(context=shared)],
     )
 
     team = Team(
         name="Research & Decision Team",
-        agents=[research_agent, decision_agent],
-        mode="coordinate",
+        members=[research_agent, decision_agent],
+        session_state={"shared_session_id": shared.session_id},
     )
     ```
 
@@ -207,12 +256,12 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
 
 ```python
 from integrations.agno import (
-    AgnoContextStore,    # MemoryDb implementation
-    AgnoKnowledgeGraph,  # AgentKnowledge implementation
+    AgnoContextStore,    # agno.db.base.BaseDb implementation (UserMemory group)
+    AgnoKnowledgeGraph,  # agno.knowledge.knowledge.Knowledge implementation
     AgnoDecisionKit,     # Decision intelligence Toolkit
     AgnoKGToolkit,       # Knowledge graph Toolkit
     AgnoSharedContext,   # Team-level shared context
-    AGNO_AVAILABLE,      # bool: True if agno is installed
+    AGNO_AVAILABLE,      # bool: True if agno >= 2.9 is installed
 )
 ```
 

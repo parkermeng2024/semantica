@@ -152,7 +152,7 @@ tripletstore-oxigraph = ["pyoxigraph>=0.5.0"]
 # ---- Vector Store Backends ----
 vectorstore-qdrant = ["qdrant-client>=1.0.0"]
 vectorstore-weaviate = ["weaviate-client>=4.0.0"]
-vectorstore-pinecone = ["pinecone-client>=3.0.0"]
+vectorstore-pinecone = ["pinecone>=3.0.0"]
 vectorstore-milvus = ["pymilvus>=2.0.0"]
 vectorstore-pgvector = ["psycopg[binary,pool]>=3.0.0", "pgvector>=0.2.0"]
 vectorstore-sqlite = ["sqlite-vec>=0.1.1"]
@@ -200,7 +200,7 @@ gpu = [
 ]
 
 # ---- Agentic Framework Integrations ----
-agno = ["agno>=1.0.0"]
+agno = ["agno>=2.9,<3"]
 # crewai core provides BaseTool and BaseKnowledgeSource; crewai-tools is not
 # needed (it pulls vulnerable transitive deps like chromadb) and would only
 # duplicate the prebuilt tooling users can install separately.

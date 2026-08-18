@@ -34,27 +34,52 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from semantica.utils.logging import get_logger
 
+from ._availability import AGNO_AVAILABLE, AGNO_IMPORT_ERROR  # noqa: F401
+
 logger = get_logger(__name__)
+
+
+def _coerce_json(value: Any, expected_type: type, param: str) -> Any:
+    """
+    Accept a JSON string or an already-decoded object for a tool parameter.
+
+    Models frequently pass structured objects where the schema says string
+    (and vice versa); both forms are normalised here.  ``expected_type`` is
+    the required decoded type (``dict`` or ``list``).  Raises ``ValueError``
+    with an actionable message when the value cannot be normalised.
+    """
+    expected_name = "object" if expected_type is dict else "array"
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid {param} JSON: {exc} — {param} must be a JSON "
+                f"{expected_name} or a valid JSON string"
+            ) from exc
+    else:
+        decoded = value
+    if not isinstance(decoded, expected_type):
+        raise TypeError(
+            f"{param} must be a JSON {expected_name} "
+            f"(or a JSON string encoding one), got {type(decoded).__name__}"
+        )
+    return decoded
+
 
 # ---------------------------------------------------------------------------
 # Optional: Agno Toolkit base class
 # ---------------------------------------------------------------------------
-AGNO_AVAILABLE = False
-AGNO_IMPORT_ERROR: Optional[str] = None
-
 _ToolkitBase: Any = object
 
-try:
+if AGNO_AVAILABLE:
     from agno.tools.toolkit import Toolkit as _AgnoToolkit  # type: ignore
 
     _ToolkitBase = _AgnoToolkit
-    AGNO_AVAILABLE = True
-except ImportError as exc:
-    AGNO_IMPORT_ERROR = str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +166,7 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
         reasoning: str,
         outcome: str,
         confidence: float = 0.8,
-        entities: Optional[str] = None,
+        entities: Optional[Union[str, List[str]]] = None,
     ) -> str:
         """
         Record a decision with its reasoning and outcome.
@@ -159,7 +184,8 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
         confidence:
             Confidence score in [0, 1].
         entities:
-            Comma-separated list of entity names relevant to the decision.
+            Entity names relevant to the decision — either a comma-separated
+            string or a JSON list of strings; both forms are accepted.
 
         Returns
         -------
@@ -168,7 +194,10 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
         """
         entity_list: Optional[List[str]] = None
         if entities:
-            entity_list = [e.strip() for e in entities.split(",") if e.strip()]
+            if isinstance(entities, str):
+                entity_list = [e.strip() for e in entities.split(",") if e.strip()]
+            else:
+                entity_list = [str(e).strip() for e in entities if str(e).strip()]
 
         try:
             decision_id = self._ctx.record_decision(
@@ -259,7 +288,7 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
         max_depth = depth or self.causal_depth
         try:
             chain = self._ctx.knowledge_graph.trace_decision_causality(  # type: ignore[attr-defined]
-                decision_id, depth=max_depth
+                decision_id, max_depth=max_depth
             )
             return json.dumps({"causal_chain": chain, "decision_id": decision_id})
         except AttributeError:
@@ -301,8 +330,8 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
 
     def check_policy(
         self,
-        decision_data: str,
-        policy_rules: Optional[str] = None,
+        decision_data: Union[str, Dict[str, Any]],
+        policy_rules: Optional[Union[str, List[str]]] = None,
     ) -> str:
         """
         Validate a proposed decision against policy rules.
@@ -321,22 +350,24 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
         Parameters
         ----------
         decision_data:
-            JSON string describing the decision (must include ``category``,
-            ``outcome``, ``confidence`` keys at minimum).  Must decode to a
-            JSON object — any other shape (list, number, string, bool) is
-            rejected with a single ``violations`` entry, the same as
-            malformed JSON, rather than being passed through to per-rule
-            evaluation where it would produce confusing internal errors.
+            The decision to validate — either a JSON object (``dict``) or a
+            JSON string encoding one; both forms are accepted.  Must include
+            ``category``, ``outcome``, ``confidence`` keys at minimum.  Any
+            other shape (list, number, string, bool) is rejected with a
+            single ``violations`` entry, the same as malformed JSON, rather
+            than being passed through to per-rule evaluation where it would
+            produce confusing internal errors.
         policy_rules:
-            JSON list of rule strings, e.g.
-            ``'["confidence >= 0.7", "category != \\"test\\""]'``.
-            Each rule is a simple comparison: ``<field> <op> <value>``
-            where op is one of ``>=``, ``<=``, ``!=``, ``==``, ``>``, ``<``.
-            A JSON-encoded bare string (e.g. ``'"confidence >= 0.7"'``) is
-            treated as a single rule.  Any other decoded JSON shape (e.g. a
-            number or object), or a non-string list element, is recorded as
-            one ``warnings`` entry and otherwise ignored rather than being
-            iterated character-by-character.
+            Rules to evaluate — either a JSON list of rule strings or a JSON
+            string encoding one (a comma-separated string is also accepted);
+            both forms work.  Each rule is a simple comparison:
+            ``<field> <op> <value>`` where op is one of ``>=``, ``<=``,
+            ``!=``, ``==``, ``>``, ``<``.  A JSON-encoded bare string
+            (e.g. ``'"confidence >= 0.7"'``) is treated as a single rule.
+            Any other decoded JSON shape (e.g. a number or object), or a
+            non-string list element, is recorded as one ``warnings`` entry
+            and otherwise ignored rather than being iterated
+            character-by-character.
 
         Returns
         -------
@@ -344,24 +375,12 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
             JSON with ``{"compliant": bool, "violations": [...], "warnings": [...]}``
         """
         try:
-            data = json.loads(decision_data) if isinstance(decision_data, str) else decision_data
-        except json.JSONDecodeError as exc:
+            data = _coerce_json(decision_data, dict, "decision_data")
+        except (ValueError, TypeError) as exc:
             return json.dumps(
                 {
                     "compliant": False,
-                    "violations": [f"Invalid decision_data JSON: {exc}"],
-                    "warnings": [],
-                }
-            )
-
-        if not isinstance(data, dict):
-            return json.dumps(
-                {
-                    "compliant": False,
-                    "violations": [
-                        f"decision_data must decode to a JSON object, "
-                        f"got {type(data).__name__}: {data!r}"
-                    ],
+                    "violations": [str(exc)],
                     "warnings": [],
                 }
             )
@@ -371,29 +390,38 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
 
         rules: List[str] = []
         if policy_rules:
-            try:
-                parsed_rules = json.loads(policy_rules)
-            except json.JSONDecodeError:
-                rules = [r.strip() for r in policy_rules.split(",") if r.strip()]
+            if isinstance(policy_rules, list):
+                for item in policy_rules:
+                    if isinstance(item, str):
+                        rules.append(item)
+                    else:
+                        warnings.append(
+                            f"Ignoring non-string policy rule entry: {item!r}"
+                        )
             else:
-                if isinstance(parsed_rules, str):
-                    # A single rule encoded as a bare JSON string, e.g.
-                    # policy_rules='"confidence >= 0.7"'. Treat it as one
-                    # rule rather than iterating it character-by-character.
-                    rules = [parsed_rules]
-                elif isinstance(parsed_rules, list):
-                    for item in parsed_rules:
-                        if isinstance(item, str):
-                            rules.append(item)
-                        else:
-                            warnings.append(
-                                f"Ignoring non-string policy rule entry: {item!r}"
-                            )
+                try:
+                    parsed_rules = json.loads(policy_rules)
+                except json.JSONDecodeError:
+                    rules = [r.strip() for r in policy_rules.split(",") if r.strip()]
                 else:
-                    warnings.append(
-                        f"policy_rules must decode to a JSON list of rule strings, "
-                        f"got {type(parsed_rules).__name__}: {parsed_rules!r}"
-                    )
+                    if isinstance(parsed_rules, str):
+                        # A single rule encoded as a bare JSON string, e.g.
+                        # policy_rules='"confidence >= 0.7"'. Treat it as one
+                        # rule rather than iterating it character-by-character.
+                        rules = [parsed_rules]
+                    elif isinstance(parsed_rules, list):
+                        for item in parsed_rules:
+                            if isinstance(item, str):
+                                rules.append(item)
+                            else:
+                                warnings.append(
+                                    f"Ignoring non-string policy rule entry: {item!r}"
+                                )
+                    else:
+                        warnings.append(
+                            f"policy_rules must decode to a JSON list of rule strings, "
+                            f"got {type(parsed_rules).__name__}: {parsed_rules!r}"
+                        )
 
         for rule in rules:
             try:

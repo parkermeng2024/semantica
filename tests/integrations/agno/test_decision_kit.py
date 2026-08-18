@@ -5,45 +5,9 @@ Tests for AgnoDecisionKit — decision intelligence Agno Toolkit.
 from __future__ import annotations
 
 import json
-import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-
-# ---------------------------------------------------------------------------
-# Stub agno Toolkit
-# ---------------------------------------------------------------------------
-def _stub_agno() -> None:
-    if "agno" in sys.modules:
-        return
-
-    agno = types.ModuleType("agno")
-
-    tools_pkg = types.ModuleType("agno.tools")
-    tools_toolkit = types.ModuleType("agno.tools.toolkit")
-
-    class Toolkit:
-        def __init__(self, name="toolkit", **kw):
-            self.name = name
-            self._tools = []
-
-        def register(self, fn):
-            self._tools.append(fn)
-
-    tools_toolkit.Toolkit = Toolkit  # type: ignore
-    tools_pkg.toolkit = tools_toolkit
-    agno.tools = tools_pkg  # type: ignore
-
-    for name, mod in [
-        ("agno", agno),
-        ("agno.tools", tools_pkg),
-        ("agno.tools.toolkit", tools_toolkit),
-    ]:
-        sys.modules.setdefault(name, mod)
-
-
-_stub_agno()
 
 from integrations.agno.decision_kit import AgnoDecisionKit  # noqa: E402
 
@@ -455,3 +419,58 @@ class TestGetDecisionSummary(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStructuredParameterEquivalence(unittest.TestCase):
+    """Tools must accept structured objects as well as JSON strings."""
+
+    def setUp(self):
+        self.kit = AgnoDecisionKit()
+
+    def test_check_policy_accepts_dict_and_list_directly(self):
+        data = {
+            "category": "investment_approval",
+            "outcome": "approved",
+            "confidence": 0.9,
+            "customer_concentration": 0.46,
+        }
+        rules = ["customer_concentration <= 0.35", "confidence >= 0.75"]
+        direct = json.loads(self.kit.check_policy(data, rules))
+        as_strings = json.loads(
+            self.kit.check_policy(json.dumps(data), json.dumps(rules))
+        )
+        self.assertEqual(direct, as_strings)
+        self.assertFalse(direct["compliant"])
+        self.assertEqual(len(direct["violations"]), 1)
+
+    def test_check_policy_compliant_dict_input(self):
+        data = {"category": "c", "outcome": "approved", "confidence": 0.9}
+        result = json.loads(self.kit.check_policy(data, ["confidence >= 0.75"]))
+        self.assertTrue(result["compliant"])
+
+    def test_check_policy_rejects_bad_type_with_actionable_message(self):
+        result = json.loads(self.kit.check_policy(["not", "a", "dict"], ["confidence >= 0.75"]))
+        self.assertFalse(result["compliant"])
+        self.assertIn("JSON object", result["violations"][0])
+
+    def test_record_decision_accepts_entity_list(self):
+        ctx = _make_context()
+        kit = AgnoDecisionKit(context=ctx)
+        by_list = json.loads(kit.record_decision(
+            category="c", scenario="s", reasoning="r", outcome="rejected",
+            confidence=0.9, entities=["Project Aurora", "Acme Enterprise"],
+        ))
+        self.assertEqual(by_list.get("status"), "recorded")
+        self.assertEqual(
+            ctx.record_decision.call_args.kwargs["entities"],
+            ["Project Aurora", "Acme Enterprise"],
+        )
+        by_string = json.loads(kit.record_decision(
+            category="c", scenario="s", reasoning="r", outcome="rejected",
+            confidence=0.9, entities="Project Aurora, Acme Enterprise",
+        ))
+        self.assertEqual(by_string.get("status"), "recorded")
+        self.assertEqual(
+            ctx.record_decision.call_args.kwargs["entities"],
+            ["Project Aurora", "Acme Enterprise"],
+        )

@@ -5,44 +5,9 @@ Tests for AgnoKGToolkit — knowledge graph Agno Toolkit.
 from __future__ import annotations
 
 import json
-import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-
-# ---------------------------------------------------------------------------
-# Stub agno Toolkit
-# ---------------------------------------------------------------------------
-def _stub_agno() -> None:
-    if "agno" in sys.modules:
-        return
-
-    agno = types.ModuleType("agno")
-    tools_pkg = types.ModuleType("agno.tools")
-    tools_toolkit = types.ModuleType("agno.tools.toolkit")
-
-    class Toolkit:
-        def __init__(self, name="toolkit", **kw):
-            self.name = name
-            self._tools = []
-
-        def register(self, fn):
-            self._tools.append(fn)
-
-    tools_toolkit.Toolkit = Toolkit  # type: ignore
-    tools_pkg.toolkit = tools_toolkit
-    agno.tools = tools_pkg  # type: ignore
-
-    for name, mod in [
-        ("agno", agno),
-        ("agno.tools", tools_pkg),
-        ("agno.tools.toolkit", tools_toolkit),
-    ]:
-        sys.modules.setdefault(name, mod)
-
-
-_stub_agno()
 
 from integrations.agno.kg_toolkit import AgnoKGToolkit  # noqa: E402
 
@@ -88,24 +53,36 @@ class _FakeGraph:
     """Fake ContextGraph whose signatures match the real ContextGraph API."""
 
     def __init__(self):
-        self._node_store: dict = {}   # node_id -> {"node_id": ..., "node_type": ...}
+        self._node_store: dict = {}   # node_id -> {"id": ..., "type": ..., "metadata": ...}
         self._edge_store: list = []
 
     # ContextGraph.find_nodes(node_type=None) -> List[Dict]
     def find_nodes(self, node_type=None):
         nodes = list(self._node_store.values())
         if node_type:
-            nodes = [n for n in nodes if n.get("node_type") == node_type]
+            nodes = [n for n in nodes if n.get("type") == node_type]
         return nodes
 
     # ContextGraph.add_node(node_id, node_type, content=None, **props) -> bool
     def add_node(self, node_id, node_type="Entity", content=None, **props):
-        self._node_store[node_id] = {"node_id": node_id, "node_type": node_type}
+        self._node_store[node_id] = {
+            "id": node_id,
+            "type": node_type,
+            "content": content or node_id,
+            "metadata": dict(props),
+        }
         return True
 
     # ContextGraph.add_edge(source_id, target_id, edge_type, **props) -> bool
     def add_edge(self, source_id, target_id, edge_type="related_to", **props):
-        self._edge_store.append((source_id, target_id, edge_type))
+        self._edge_store.append(
+            {
+                "source": source_id,
+                "target": target_id,
+                "type": edge_type,
+                "metadata": dict(props),
+            }
+        )
         return True
 
     # ContextGraph.get_neighbors(node_id, hops=1, ...) -> List[Dict]
@@ -276,6 +253,57 @@ class TestAddToGraph(unittest.TestCase):
         self.assertEqual(result["nodes_added"], 0)
         self.assertEqual(result["edges_added"], 0)
 
+    def test_preserves_entity_and_relation_properties(self):
+        entities = json.dumps(
+            [
+                {
+                    "name": "Project Aurora",
+                    "type": "InvestmentCandidate",
+                    "properties": {"arr_usd": 12_000_000},
+                }
+            ]
+        )
+        relations = json.dumps(
+            [
+                {
+                    "source": "Project Aurora",
+                    "relation": "DEPENDS_ON",
+                    "target": "Acme Enterprise",
+                    "properties": {"revenue_share": 0.46},
+                }
+            ]
+        )
+        result = json.loads(self.kit.add_to_graph(entities=entities, relations=relations))
+        self.assertEqual(result, {"nodes_added": 1, "edges_added": 1})
+        self.assertEqual(
+            self.graph._node_store["Project Aurora"]["metadata"]["arr_usd"],
+            12_000_000,
+        )
+        self.assertEqual(self.graph._edge_store[0]["metadata"]["revenue_share"], 0.46)
+
+    def test_surfaces_backend_errors(self):
+        self.graph.add_node = MagicMock(side_effect=RuntimeError("write failed"))
+        result = json.loads(
+            self.kit.add_to_graph(entities='[{"name": "Project Aurora", "type": "Project"}]')
+        )
+        self.assertEqual(result["nodes_added"], 0)
+        self.assertIn("write failed", result["error"])
+
+    def test_counts_only_successful_writes(self):
+        def flaky_add(node_id, node_type="Entity", content=None, **props):
+            if node_id == "Bad":
+                raise RuntimeError("boom")
+            self.graph._node_store[node_id] = {"id": node_id, "type": node_type, "metadata": dict(props)}
+            return True
+
+        self.graph.add_node = flaky_add
+        entities = json.dumps(
+            [{"name": "Good", "type": "X"}, {"name": "Bad", "type": "X"}]
+        )
+        result = json.loads(self.kit.add_to_graph(entities=entities))
+        self.assertEqual(result["nodes_added"], 1)
+        self.assertIn("entity 'Bad'", result["error"])
+
 
 class TestQueryGraph(unittest.TestCase):
 
@@ -292,6 +320,19 @@ class TestQueryGraph(unittest.TestCase):
         result = json.loads(self.kit.query_graph("Tesla"))
         self.assertIn("results", result)
         self.assertEqual(result["query_type"], "keyword")
+
+    def test_keyword_query_returns_real_context_graph_shape_and_properties(self):
+        self.graph.add_node(
+            "Project Aurora",
+            "InvestmentCandidate",
+            customer_concentration=0.46,
+        )
+        result = json.loads(self.kit.query_graph("Project Aurora"))
+        self.assertEqual(result["count"], 1)
+        node = result["results"][0]
+        self.assertEqual(node["id"], "Project Aurora")
+        self.assertEqual(node["type"], "InvestmentCandidate")
+        self.assertEqual(node["properties"]["customer_concentration"], 0.46)
 
     def test_cypher_query_without_backend(self):
         result = json.loads(self.kit.query_graph("MATCH (n) RETURN n LIMIT 5"))
@@ -393,3 +434,47 @@ class TestExportSubgraph(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStructuredParameterEquivalence(unittest.TestCase):
+    """Tools must accept structured objects as well as JSON strings."""
+
+    def setUp(self):
+        self.graph = _FakeGraph()
+        self.kit = AgnoKGToolkit(
+            ner_extractor=_FakeNER(),
+            relation_extractor=_FakeRelExtractor(),
+            reasoner=_FakeReasoner(),
+        )
+        self.kit._graph = self.graph
+
+    def test_add_to_graph_accepts_list_directly(self):
+        entities = [{"name": "Alice", "type": "PERSON", "properties": {"age": 34}}]
+        relations = [{"source": "Alice", "relation": "WORKS_AT", "target": "ACME"}]
+        direct = json.loads(self.kit.add_to_graph(entities=entities, relations=relations))
+        self.assertEqual(direct, {"nodes_added": 1, "edges_added": 1})
+        self.assertEqual(self.graph._node_store["Alice"]["metadata"]["age"], 34)
+
+    def test_add_to_graph_list_equivalent_to_json_string(self):
+        entities = [{"name": "Bob", "type": "PERSON"}]
+        direct = json.loads(self.kit.add_to_graph(entities=entities))
+        as_string = json.loads(self.kit.add_to_graph(entities=json.dumps(entities)))
+        self.assertEqual(direct, as_string)
+
+    def test_add_to_graph_wraps_single_object(self):
+        result = json.loads(self.kit.add_to_graph(entities={"name": "Solo", "type": "X"}))
+        self.assertEqual(result["nodes_added"], 1)
+
+    def test_add_to_graph_bad_type_is_actionable_error(self):
+        result = json.loads(self.kit.add_to_graph(entities=42))
+        self.assertIn("JSON array", result["error"])
+
+    def test_extract_relations_accepts_entity_list(self):
+        direct = json.loads(self.kit.extract_relations("text", entities=["Tesla"]))
+        as_string = json.loads(self.kit.extract_relations("text", entities='["Tesla"]'))
+        self.assertEqual(direct["count"], as_string["count"])
+
+    def test_infer_facts_accepts_rule_list(self):
+        direct = json.loads(self.kit.infer_facts(rules=["IF X(?a) THEN Y(?a)"]))
+        as_string = json.loads(self.kit.infer_facts(rules='["IF X(?a) THEN Y(?a)"]'))
+        self.assertEqual(direct["count"], as_string["count"])
