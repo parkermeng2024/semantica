@@ -55,3 +55,109 @@ def test_seed_demo_data_rejects_tool_errors():
 
     with pytest.raises(DemoValidationError, match="write failed"):
         seed_demo_data(load_case(DEFAULT_CASE_PATH), BrokenKG(), object())
+
+
+# ---------------------------------------------------------------------------
+# validate_run / render_execution
+# ---------------------------------------------------------------------------
+from examples.agno_29_investment_demo import render_execution, validate_run  # noqa: E402
+
+
+def _tool(name, result, args=None, error=False):
+    return SimpleNamespace(
+        tool_name=name,
+        tool_args=args or {},
+        tool_call_error=error,
+        result=json.dumps(result),
+    )
+
+
+def _successful_run(decision_id):
+    return SimpleNamespace(
+        content="建议拒绝，并在监管许可完成后重新评估。",
+        tools=[
+            _tool("query_graph", {"results": [{"id": "Project Aurora"}], "count": 1}),
+            _tool("find_related", {"related": ["Acme Enterprise"]}),
+            _tool("find_precedents", {"precedents": [{"outcome": "rejected"}], "count": 1}),
+            _tool(
+                "check_policy",
+                {
+                    "compliant": False,
+                    "violations": [
+                        "Rule violated: customer_concentration <= 0.35",
+                        "Rule violated: regulatory_clearance == true",
+                    ],
+                    "warnings": [],
+                },
+            ),
+            _tool("record_decision", {"decision_id": decision_id, "status": "recorded"}),
+        ],
+    )
+
+
+def _record_decision(context, outcome="rejected"):
+    return context.record_decision(
+        category="investment_approval",
+        scenario="Project Aurora investment review",
+        reasoning="Customer concentration and clearance violate policy.",
+        outcome=outcome,
+        confidence=0.91,
+        entities=["Project Aurora"],
+    )
+
+
+def test_validate_run_accepts_complete_governed_trace():
+    context = build_context()
+    decision_id = _record_decision(context)
+    result = validate_run(_successful_run(decision_id), context)
+    assert result.ok is True
+    assert result.decision_id == decision_id
+    assert result.audit_record["metadata"]["outcome"] == "rejected"
+
+
+def test_validate_run_rejects_missing_and_duplicate_required_calls():
+    context = build_context()
+    run = SimpleNamespace(content="bad", tools=[])
+    result = validate_run(run, context)
+    assert result.ok is False
+    assert "missing required tool call: query_graph" in result.errors
+    assert "record_decision must be called exactly once; observed 0" in result.errors
+
+
+def test_validate_run_rejects_policy_contradiction():
+    context = build_context()
+    decision_id = _record_decision(context, outcome="approved")
+    result = validate_run(_successful_run(decision_id), context)
+    assert result.ok is False
+    assert "outcome 'approved' contradicts policy" in result.errors
+
+
+def test_validate_run_rejects_tool_errors():
+    context = build_context()
+    decision_id = _record_decision(context)
+    run = _successful_run(decision_id)
+    run.tools[0] = _tool("query_graph", {}, error=True)
+    result = validate_run(run, context)
+    assert result.ok is False
+    assert "tool call failed: query_graph" in result.errors
+
+
+def test_render_execution_prints_model_and_audit_sections():
+    context = build_context()
+    decision_id = _record_decision(context)
+    run = _successful_run(decision_id)
+    validation = validate_run(run, context)
+    output = StringIO()
+    render_execution(
+        load_case(DEFAULT_CASE_PATH),
+        run,
+        validation,
+        stream=output,
+        debug=True,
+    )
+    text = output.getvalue()
+    assert "Agno 工具调用轨迹" in text
+    assert "DeepSeek 投资建议" in text
+    assert "Semantica 审计记录" in text
+    assert "Sanitized tool details" in text
+    assert decision_id in text
