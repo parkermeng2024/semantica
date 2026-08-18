@@ -6,7 +6,25 @@ icon: "robot"
 
 > Five drop-in components that bring Semantica's KG, vector memory, and decision intelligence into any Agno agent or team.
 
-Requires **agno ≥ 2.9** (the v2 API — agno v1 is not supported).
+Requires **agno ≥ 2.9** (the v2 API — agno v1 is not supported). All five components are **Agno 2.9 native**: no legacy adapters, no compatibility shims — each one subclasses the real v2 base class (`Toolkit`, `BaseDb`, `Knowledge`) and can be passed directly to Agno 2.9 `Agent` / `Team` constructors.
+
+## Full-Stack Investment Demo
+
+A single CLI demo wires **all five components** into one governed investment review: an Agno `Agent` powered by `deepseek-v4-pro` evaluates the Project Aurora case with `tools=[AgnoKGToolkit, AgnoDecisionKit]`, `db=AgnoContextStore`, and `knowledge=AgnoKnowledgeGraph` (the fixture's due-diligence documents are ingested as GraphRAG).
+
+```bash
+pip install -e ".[agno,llm-openai]"
+
+# Offline deterministic run — no API key needed, exercises the full
+# seed → validate → render governance pipeline:
+python examples/agno_29_investment_demo.py
+
+# Live run against the real DeepSeek API:
+export DEEPSEEK_API_KEY="your-key"
+python examples/agno_29_investment_demo.py --live
+```
+
+The CLI queries Project Aurora's context graph, compares historical investment precedents, evaluates policy gates, and records exactly one auditable final decision. Exit codes: `0` governed PASS, `2` configuration error, `3` model error, `4` governance/validation failure. Add `--debug` for sanitized tool details (never includes keys, headers, or request payloads).
 
 ## Installation
 
