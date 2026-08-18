@@ -290,17 +290,17 @@ class AgnoKGToolkit(_ToolkitBase):  # type: ignore[misc]
 
     def query_graph(self, query: str) -> str:
         """
-        Query the context graph in natural language or Cypher.
+        Query the context graph with a plain natural-language keyword.
 
-        For natural-language queries all nodes are retrieved and filtered by
-        whether ``query`` appears in their ``node_id``.  Pass a string starting
-        with ``"MATCH"`` for raw Cypher execution (requires a Neo4j / FalkorDB
-        backend).
+        IMPORTANT: pass a short keyword or entity name (e.g. "Project
+        Aurora") — NOT a Cypher query.  Cypher (``MATCH ...``) is not
+        supported in this deployment and will be rejected; always use the
+        keyword form.  The query matches nodes whose id or type contains it.
 
         Parameters
         ----------
         query:
-            Search query string.
+            Natural-language keyword or entity name (never Cypher).
 
         Returns
         -------
