@@ -993,7 +993,7 @@ TemporalVisualizer().visualize_timeline(kg, output="interactive")
 
 One shared intelligence layer. All agents read and write to the same context graph.
 
-> **Agno 2.9 native:** all five integration components (`AgnoKGToolkit`, `AgnoDecisionKit`, `AgnoContextStore`, `AgnoKnowledgeGraph`, `AgnoSharedContext`) target the Agno 2.9 v2 API directly — no legacy adapters. See the governed full-stack demo: `python examples/agno_29_investment_demo.py` (offline by default; add `--live` with `DEEPSEEK_API_KEY` for a real DeepSeek run).
+> **Agno 2.9 native:** all five integration components (`AgnoKGToolkit`, `AgnoDecisionKit`, `AgnoContextStore`, `AgnoKnowledgeGraph`, `AgnoSharedContext`) target the Agno 2.9 v2 API directly — no legacy adapters. See the governed full-stack demo: `python examples/agno_29_investment_demo.py` (offline by default; add `--live` with `DEEPSEEK_API_KEY` for a real DeepSeek run). Add `--committee` to run it as a multi-Agent investment-committee `Team` (analyst + compliance + chair) sharing one `ContextGraph` via `AgnoSharedContext`.
 
 ```python
 # pip install semantica[agno]

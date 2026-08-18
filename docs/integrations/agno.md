@@ -26,6 +26,32 @@ python examples/agno_29_investment_demo.py --live
 
 The CLI queries Project Aurora's context graph, compares historical investment precedents, evaluates policy gates, and records exactly one auditable final decision. Exit codes: `0` governed PASS, `2` configuration error, `3` model error, `4` governance/validation failure. Add `--debug` for sanitized tool details (never includes keys, headers, or request payloads).
 
+### Committee mode (multi-Agent Team)
+
+Add `--committee` to upgrade the demo from one Agent to an Agno `Team` (coordinate mode) — an **analyst** Agent (graph evidence + precedents), a **compliance** Agent (policy gates), and a **chair** leader who delegates to both and records the single final decision:
+
+```bash
+python examples/agno_29_investment_demo.py --committee          # offline, deterministic
+python examples/agno_29_investment_demo.py --committee --live   # real DeepSeek run
+```
+
+Both members share one `ContextGraph` through `AgnoSharedContext`, each getting a role-scoped view via `bind_agent()`:
+
+```python
+from integrations.agno import AgnoSharedContext
+
+shared = AgnoSharedContext(
+    vector_store=context.vector_store,
+    knowledge_graph=context.knowledge_graph,
+    decision_tracking=True,
+)
+analyst = Agent(name="analyst", tools=[kg_toolkit], db=shared.bind_agent("analyst"), ...)
+compliance = Agent(name="compliance", tools=[policy_kit], db=shared.bind_agent("compliance"), ...)
+team = Team(members=[analyst, compliance], tools=[chair_kit], mode="coordinate", ...)
+```
+
+Governance validation is team-level: the validator aggregates the chair's own tools with every member's tools from `TeamRunOutput.member_responses` and asserts that `record_decision` and `check_policy` each fire **exactly once across the whole team**, with errors attributed to the responsible role (`analyst:`, `compliance:`, `chair:`).
+
 ## Installation
 
 ```bash
