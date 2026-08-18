@@ -48,3 +48,44 @@ def test_real_agno_29_toolkit_contract_without_model_call():
         tools=[kg, decisions],
     )
     assert agent.model.id == "deepseek-v4-pro"
+
+
+def test_real_agno_29_team_member_tool_traces_enumerable():
+    """
+    Committee contract: a scripted-model Team run (zero network) must expose
+    every member's tool trajectory via ``TeamRunOutput.member_responses`` —
+    the foundation of team-level governance invariants.
+    """
+    from examples.agno_29_investment_demo import (
+        DEFAULT_CASE_PATH,
+        build_committee,
+        build_context,
+        load_case,
+        seed_demo_data,
+        validate_team_run,
+    )
+    from integrations.agno import AgnoSharedContext
+
+    case_data = load_case(DEFAULT_CASE_PATH)
+    context = build_context()
+    seed_demo_data(case_data, AgnoKGToolkit(context=context), AgnoDecisionKit(context=context))
+    shared = AgnoSharedContext(
+        vector_store=context.vector_store,
+        knowledge_graph=context.knowledge_graph,
+        decision_tracking=True,
+        advanced_analytics=False,
+        kg_algorithms=False,
+    )
+    team = build_committee(context, shared, case_data, live=False)
+    run_output = team.run(case_data["request_zh"], stream=False)
+
+    member_names = {m.agent_name for m in run_output.member_responses}
+    assert member_names == {"analyst", "compliance"}
+    aggregated = [t.tool_name for t in (run_output.tools or [])]
+    for member in run_output.member_responses:
+        aggregated.extend(t.tool_name for t in (member.tools or []))
+    assert aggregated.count("record_decision") == 1
+    assert aggregated.count("check_policy") == 1
+
+    validation = validate_team_run(run_output, context)
+    assert validation.ok is True, validation.errors
