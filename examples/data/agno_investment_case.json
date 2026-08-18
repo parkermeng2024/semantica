@@ -1,0 +1,83 @@
+{
+  "project": "Project Aurora",
+  "category": "investment_approval",
+  "entities": [
+    {
+      "name": "Project Aurora",
+      "type": "InvestmentCandidate",
+      "properties": {
+        "proposed_investment_usd": 5000000,
+        "arr_usd": 12000000,
+        "annual_growth": 0.38,
+        "gross_margin": 0.72,
+        "customer_concentration": 0.46,
+        "regulatory_clearance": false,
+        "cash_runway_months": 18
+      }
+    },
+    {
+      "name": "Acme Enterprise",
+      "type": "Customer",
+      "properties": {"revenue_share": 0.46}
+    },
+    {
+      "name": "EU Regulator",
+      "type": "Regulator",
+      "properties": {"clearance_status": "pending"}
+    },
+    {
+      "name": "Enterprise AI Market",
+      "type": "Market",
+      "properties": {"annual_growth": 0.31}
+    }
+  ],
+  "relations": [
+    {
+      "source": "Project Aurora",
+      "relation": "DEPENDS_ON",
+      "target": "Acme Enterprise",
+      "properties": {"revenue_share": 0.46}
+    },
+    {
+      "source": "Project Aurora",
+      "relation": "REQUIRES_CLEARANCE_FROM",
+      "target": "EU Regulator",
+      "properties": {"status": "pending"}
+    },
+    {
+      "source": "Project Aurora",
+      "relation": "OPERATES_IN",
+      "target": "Enterprise AI Market",
+      "properties": {"market_growth": 0.31}
+    }
+  ],
+  "precedents": [
+    {
+      "category": "investment_approval",
+      "scenario": "Project Atlas had 52% customer concentration and pending regulatory clearance.",
+      "reasoning": "Concentration and unresolved clearance exceeded policy limits.",
+      "outcome": "rejected",
+      "confidence": 0.9,
+      "entities": "Project Atlas"
+    },
+    {
+      "category": "investment_approval",
+      "scenario": "Project Nova had 28% customer concentration and completed regulatory clearance.",
+      "reasoning": "Growth was strong and all policy gates passed.",
+      "outcome": "approved",
+      "confidence": 0.86,
+      "entities": "Project Nova"
+    }
+  ],
+  "policy_rules": [
+    "customer_concentration <= 0.35",
+    "regulatory_clearance == true",
+    "confidence >= 0.75"
+  ],
+  "documents": [
+    "Project Aurora due diligence excerpt 1: the company reports $12M ARR growing 38% year over year with a 72% gross margin. However, Acme Enterprise alone accounts for 46% of total revenue, creating a severe single-customer dependency.",
+    "Project Aurora due diligence excerpt 2: regulatory review by the EU Regulator is still pending. No clearance has been granted for the data-processing practices that underpin the core product, and the timeline for approval is uncertain.",
+    "Project Aurora due diligence excerpt 3: the enterprise AI market is expanding at roughly 31% annually. The company holds an 18-month cash runway, but a rejection or delay of regulatory clearance would force an immediate bridge round."
+  ],
+  "request_zh": "请评估 Project Aurora 是否应获批 500 万美元投资。必须基于图谱证据、历史先例和政策检查，并记录唯一的最终决定。"
+}
