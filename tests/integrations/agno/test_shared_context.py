@@ -209,3 +209,105 @@ class TestSharedContextThreadSafety(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDecisionKitOnSharedContext(unittest.TestCase):
+    """
+    AgnoDecisionKit must work directly on AgnoSharedContext and on the
+    role-scoped stores returned by bind_agent() — no silent error JSON.
+    """
+
+    def _real_shared(self):
+        from semantica.context import ContextGraph
+        from semantica.vector_store import VectorStore
+
+        return AgnoSharedContext(
+            vector_store=VectorStore(backend="inmemory"),
+            knowledge_graph=ContextGraph(advanced_analytics=False),
+            decision_tracking=True,
+            advanced_analytics=False,
+            kg_algorithms=False,
+        )
+
+    def _exercise_kit(self, kit):
+        import json
+
+        rec = json.loads(
+            kit.record_decision(
+                category="investment_approval",
+                scenario="Project Aurora review",
+                reasoning="Customer concentration exceeds policy.",
+                outcome="rejected",
+                confidence=0.9,
+                entities="Project Aurora",
+            )
+        )
+        self.assertEqual(rec.get("status"), "recorded", rec)
+        decision_id = rec["decision_id"]
+
+        precedents = json.loads(
+            kit.find_precedents(
+                scenario="Project Aurora review", category="investment_approval"
+            )
+        )
+        self.assertNotIn("error", precedents)
+
+        trace = json.loads(kit.trace_causal_chain(decision_id=decision_id))
+        self.assertNotIn("error", trace)
+
+        impact = json.loads(kit.analyze_impact(decision_id=decision_id))
+        self.assertNotIn("error", impact)
+
+        summary = json.loads(kit.get_decision_summary())
+        self.assertNotIn("error", summary)
+
+        return decision_id
+
+    def test_decision_kit_on_shared_context(self):
+        from integrations.agno.decision_kit import AgnoDecisionKit
+
+        shared = self._real_shared()
+        self._exercise_kit(AgnoDecisionKit(context=shared))
+
+    def test_decision_kit_on_role_scoped_store(self):
+        from integrations.agno.decision_kit import AgnoDecisionKit
+
+        shared = self._real_shared()
+        scoped = shared.bind_agent("analyst")
+        decision_id = self._exercise_kit(AgnoDecisionKit(context=scoped))
+
+        # Role semantics: the recorded decision is tagged with the role and
+        # lands in the shared graph.
+        node = shared.knowledge_graph.find_node(decision_id)
+        self.assertIsNotNone(node)
+        self.assertEqual(node["metadata"]["category"], "investment_approval:analyst")
+
+    def test_scoped_store_record_decision_delegates_with_role(self):
+        shared = _make_shared()
+        scoped = shared.bind_agent("compliance")
+        scoped.record_decision(
+            category="investment_approval",
+            scenario="s",
+            reasoning="r",
+            outcome="rejected",
+            confidence=0.9,
+            entities=["Project Aurora"],
+        )
+        shared._context.record_decision.assert_called_once()
+        kwargs = shared._context.record_decision.call_args.kwargs
+        self.assertEqual(kwargs["category"], "investment_approval:compliance")
+
+    def test_shared_find_precedents_advanced_delegates(self):
+        shared = _make_shared()
+        shared.find_precedents_advanced(scenario="s", category="c", limit=7)
+        shared._context.find_precedents_advanced.assert_called_once_with(
+            scenario="s", category="c", limit=7
+        )
+
+    def test_kg_toolkit_on_role_scoped_store(self):
+        from integrations.agno.kg_toolkit import AgnoKGToolkit
+
+        shared = self._real_shared()
+        scoped = shared.bind_agent("analyst")
+        kit = AgnoKGToolkit(context=scoped)
+        self.assertIs(kit._graph, shared.knowledge_graph)

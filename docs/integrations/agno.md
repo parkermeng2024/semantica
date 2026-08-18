@@ -198,6 +198,8 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
   <Tab title="AgnoSharedContext">
     A single `ContextGraph` shared across an Agno `Team`. Each agent gets a role-scoped view via `bind_agent()`. Writes are tagged by role.
 
+    Both the shared context and every role-scoped store expose the full `AgentContext` decision protocol (`record_decision`, `find_precedents_advanced`, `analyze_decision_influence`, `get_context_insights`, `knowledge_graph`), so `AgnoDecisionKit` and `AgnoKGToolkit` can attach to either one directly. Decisions recorded through a scoped store are tagged `"<category>:<role>"`.
+
     ```python
     from agno.agent import Agent
     from agno.team.team import Team

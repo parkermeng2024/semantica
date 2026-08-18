@@ -761,7 +761,6 @@ def _committee_instructions(role: str, case_data: Dict[str, Any]) -> List[str]:
 
 
 def build_committee(
-    context: AgentContext,
     shared: Any,
     case_data: Dict[str, Any],
     live: bool = False,
@@ -775,22 +774,24 @@ def build_committee(
     - chair (Team leader): ``record_decision`` exactly once, after delegating
       to both members
 
-    Both members run with ``db=shared.bind_agent(role)`` — role-scoped views
-    over the one shared ``ContextGraph``.  Offline mode drives the real Team
-    with scripted deterministic models (zero network); live mode uses
-    ``deepseek-v4-pro`` for all three roles.
+    All toolkits attach directly to the ``AgnoSharedContext`` (the chair's
+    final decision stays untagged); both members additionally run with
+    ``db=shared.bind_agent(role)`` — role-scoped views over the one shared
+    ``ContextGraph``.  Offline mode drives the real Team with scripted
+    deterministic models (zero network); live mode uses ``deepseek-v4-pro``
+    for all three roles.
     """
     from agno.agent import Agent
     from agno.team.team import Team
 
     from integrations.agno import AgnoDecisionKit, AgnoKGToolkit
 
-    kg = _prune_tools(AgnoKGToolkit(context=context), {"query_graph", "find_related"})
+    kg = _prune_tools(AgnoKGToolkit(context=shared), {"query_graph", "find_related"})
     analyst_decisions = _prune_tools(
-        AgnoDecisionKit(context=context), {"find_precedents"}
+        AgnoDecisionKit(context=shared), {"find_precedents"}
     )
-    compliance_kit = _prune_tools(AgnoDecisionKit(context=context), {"check_policy"})
-    chair_kit = _prune_tools(AgnoDecisionKit(context=context), {"record_decision"})
+    compliance_kit = _prune_tools(AgnoDecisionKit(context=shared), {"check_policy"})
+    chair_kit = _prune_tools(AgnoDecisionKit(context=shared), {"record_decision"})
 
     props = next(
         item for item in case_data["entities"] if item["name"] == case_data["project"]
@@ -963,7 +964,7 @@ def execute_demo(
             advanced_analytics=False,
             kg_algorithms=False,
         )
-        team = build_committee(context, shared, case_data, live=live, debug=debug)
+        team = build_committee(shared, case_data, live=live, debug=debug)
         try:
             run_output = team.run(case_data["request_zh"], stream=False)
         except Exception as exc:

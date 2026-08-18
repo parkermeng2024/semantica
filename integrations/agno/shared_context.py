@@ -78,6 +78,36 @@ class _AgentScopedStore(AgnoContextStore):
         self._context = shared._context  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
+    # Decision protocol with role semantics
+    # ------------------------------------------------------------------
+
+    def record_decision(
+        self,
+        category: str,
+        scenario: str,
+        reasoning: str,
+        outcome: str,
+        confidence: float = 0.8,
+        entities: Optional[List[str]] = None,
+    ) -> str:
+        """
+        Record a decision into the shared graph, tagged with this role.
+
+        Same call shape as ``AgentContext.record_decision`` (the protocol
+        ``AgnoDecisionKit`` consumes); the role is encoded into the category
+        as ``"<category>:<role>"`` by ``AgnoSharedContext.record_decision``.
+        """
+        return self._shared.record_decision(
+            category=category,
+            scenario=scenario,
+            reasoning=reasoning,
+            outcome=outcome,
+            confidence=confidence,
+            entities=entities,
+            agent_role=self._role,
+        )
+
+    # ------------------------------------------------------------------
     # Override upsert / read to tag with role and share across agents
     # ------------------------------------------------------------------
 
@@ -315,7 +345,7 @@ class AgnoSharedContext:
     ) -> List[Dict[str, Any]]:
         """Search all agents' decision history for similar precedents."""
         try:
-            return self._context.find_precedents_advanced(
+            return self.find_precedents_advanced(
                 scenario=scenario,
                 category=category,
                 limit=limit,
@@ -324,10 +354,44 @@ class AgnoSharedContext:
             logger.warning("find_precedents failed: %s", exc)
             return []
 
+    def find_precedents_advanced(
+        self,
+        scenario: str,
+        category: Optional[str] = None,
+        limit: int = 10,
+        **kwargs: Any,
+    ) -> List[Any]:
+        """
+        Advanced precedent search across all bound agents — the exact
+        ``AgentContext`` protocol that ``AgnoDecisionKit`` consumes.  Extra
+        keyword arguments are forwarded to the underlying ``AgentContext``.
+        """
+        with self._lock:
+            return self._context.find_precedents_advanced(
+                scenario=scenario,
+                category=category,
+                limit=limit,
+                **kwargs,
+            )
+
+    def analyze_decision_influence(
+        self, decision_id: str, max_depth: int = 3
+    ) -> Dict[str, Any]:
+        """Analyze the downstream influence of a decision node."""
+        with self._lock:
+            return self._context.analyze_decision_influence(
+                decision_id, max_depth=max_depth
+            )
+
+    def get_context_insights(self) -> Dict[str, Any]:
+        """Return analytics over the full shared decision graph."""
+        with self._lock:
+            return self._context.get_context_insights()
+
     def get_shared_insights(self) -> Dict[str, Any]:
         """Return analytics over the full shared decision graph."""
         try:
-            return self._context.get_context_insights()
+            return self.get_context_insights()
         except Exception as exc:
             logger.warning("get_shared_insights failed: %s", exc)
             return {}

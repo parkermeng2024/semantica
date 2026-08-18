@@ -255,7 +255,7 @@ class AgnoDecisionKit(_ToolkitBase):  # type: ignore[misc]
         max_depth = depth or self.causal_depth
         try:
             chain = self._ctx.knowledge_graph.trace_decision_causality(  # type: ignore[attr-defined]
-                decision_id, depth=max_depth
+                decision_id, max_depth=max_depth
             )
             return json.dumps({"causal_chain": chain, "decision_id": decision_id})
         except AttributeError:

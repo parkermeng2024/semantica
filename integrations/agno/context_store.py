@@ -605,6 +605,41 @@ class AgnoContextStore(_BaseDbBase):  # type: ignore[misc]
             logger.warning("find_precedents failed: %s", exc)
             return []
 
+    def find_precedents_advanced(
+        self,
+        scenario: str,
+        category: Optional[str] = None,
+        limit: int = 10,
+        **kwargs: Any,
+    ) -> List[Any]:
+        """
+        Advanced precedent search — the exact ``AgentContext`` protocol that
+        ``AgnoDecisionKit`` consumes.  Extra keyword arguments are forwarded.
+        """
+        return self._context.find_precedents_advanced(
+            scenario=scenario,
+            category=category,
+            limit=limit,
+            **kwargs,
+        )
+
+    def analyze_decision_influence(
+        self, decision_id: str, max_depth: int = 3
+    ) -> Dict[str, Any]:
+        """Analyze the downstream influence of a decision node."""
+        return self._context.analyze_decision_influence(
+            decision_id, max_depth=max_depth
+        )
+
+    def get_context_insights(self) -> Dict[str, Any]:
+        """Comprehensive insights over the context graph and decisions."""
+        return self._context.get_context_insights()
+
+    @property
+    def knowledge_graph(self) -> Any:
+        """Direct access to the underlying ``ContextGraph``."""
+        return self._context.knowledge_graph
+
     def retrieve(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Hybrid retrieval: vector similarity + optional graph expansion."""
         try:

@@ -76,7 +76,7 @@ def test_real_agno_29_team_member_tool_traces_enumerable():
         advanced_analytics=False,
         kg_algorithms=False,
     )
-    team = build_committee(context, shared, case_data, live=False)
+    team = build_committee(shared, case_data, live=False)
     run_output = team.run(case_data["request_zh"], stream=False)
 
     member_names = {m.agent_name for m in run_output.member_responses}
