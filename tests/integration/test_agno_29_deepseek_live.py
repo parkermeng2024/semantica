@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
     reason="DEEPSEEK_API_KEY is required for the paid live smoke test",
 )
 def test_deepseek_v4_pro_completes_governed_investment_demo():
-    case_data, run_output, validation = execute_demo(debug=False, live=True)
+    case_data, run_output, validation, memories = execute_demo(debug=False, live=True)
     assert case_data["project"] == "Project Aurora"
     assert validation.ok is True, validation.errors
     assert validation.decision_id
@@ -39,7 +39,7 @@ def test_deepseek_v4_pro_completes_governed_investment_demo():
     reason="DEEPSEEK_API_KEY is required for the paid live smoke test",
 )
 def test_deepseek_v4_pro_completes_governed_committee_demo():
-    case_data, run_output, validation = execute_demo(
+    case_data, run_output, validation, memories = execute_demo(
         debug=False, live=True, committee=True
     )
     assert case_data["project"] == "Project Aurora"

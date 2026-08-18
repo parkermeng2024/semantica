@@ -190,7 +190,7 @@ def test_instructions_require_governed_tool_sequence():
 
 
 def test_offline_simulated_run_passes_validation():
-    case_data, run_output, validation = execute_demo(live=False)
+    case_data, run_output, validation, memories = execute_demo(live=False)
     assert case_data["project"] == "Project Aurora"
     assert validation.ok is True, validation.errors
     assert validation.audit_record["metadata"]["outcome"] in {
@@ -229,6 +229,7 @@ def test_main_returns_4_for_validation_failure(monkeypatch):
             load_case(DEFAULT_CASE_PATH),
             SimpleNamespace(content="", tools=[]),
             failed,
+            [],
         ),
     ):
         assert main([]) == 4
@@ -269,3 +270,29 @@ def test_validate_run_still_flags_builtin_tool_call_errors():
     result = validate_run(run, context)
     assert result.ok is False
     assert "tool call failed: search_knowledge_base" in result.errors
+
+
+def test_render_execution_shows_memory_section():
+    context = build_context()
+    decision_id = _record_decision(context)
+    run = _successful_run(decision_id)
+    validation = validate_run(run, context)
+    output = StringIO()
+    memories = [
+        SimpleNamespace(memory="用户偏好中文投资摘要"),
+        SimpleNamespace(memory="用户关注监管合规风险"),
+    ]
+    render_execution(
+        load_case(DEFAULT_CASE_PATH), run, validation,
+        stream=output, memories=memories,
+    )
+    text = output.getvalue()
+    assert "Agno 记忆写入" in text
+    assert "写入 2 条记忆" in text
+    assert "用户偏好中文投资摘要" in text
+
+
+def test_offline_run_returns_no_memories():
+    _, _, validation, memories = execute_demo(live=False)
+    assert validation.ok is True
+    assert memories == []

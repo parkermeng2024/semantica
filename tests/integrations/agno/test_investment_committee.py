@@ -82,7 +82,7 @@ def _record_decision(context, outcome="rejected"):
 
 
 def test_offline_committee_run_passes_team_validation():
-    case_data, run_output, validation = execute_demo(committee=True)
+    case_data, run_output, validation, memories = execute_demo(committee=True)
     assert case_data["project"] == "Project Aurora"
     assert validation.ok is True, validation.errors
     assert validation.audit_record["metadata"]["outcome"] in {

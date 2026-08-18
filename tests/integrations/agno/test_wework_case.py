@@ -73,7 +73,7 @@ def test_build_decision_data_rejects_fixture_missing_rule_field():
 
 
 def test_offline_single_agent_run_passes_for_wework():
-    case_data, run_output, validation = execute_demo(case_path=WEWORK_CASE_PATH)
+    case_data, run_output, validation, _ = execute_demo(case_path=WEWORK_CASE_PATH)
     assert case_data["project"] == "WeWork"
     assert validation.ok is True, validation.errors
     assert validation.audit_record["metadata"]["outcome"] == "rejected"
@@ -82,7 +82,7 @@ def test_offline_single_agent_run_passes_for_wework():
 
 def test_offline_committee_run_passes_for_wework():
     pytest.importorskip("agno.team.team", reason="committee path requires real agno Team")
-    case_data, run_output, validation = execute_demo(
+    case_data, run_output, validation, _ = execute_demo(
         committee=True, case_path=WEWORK_CASE_PATH
     )
     assert validation.ok is True, validation.errors

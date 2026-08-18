@@ -38,6 +38,10 @@ DEFAULT_CASE_PATH = Path(__file__).parent / "data" / "agno_investment_case.json"
 
 MODEL_ID = "deepseek-v4-pro"
 
+#: Fixed user id for the demo's single-user scenario — MemoryManager writes
+#: and the post-run memory read-back are both scoped to it.
+DEMO_USER_ID = "investment_committee"
+
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -454,12 +458,14 @@ def render_execution(
     validation: ValidationResult,
     stream: TextIO,
     debug: bool = False,
+    memories: Optional[List[Any]] = None,
 ) -> None:
     """
     Render the case summary, tool trace, model recommendation, and audit
     record to ``stream``.  The debug block contains only tool names,
     arguments, and results — never client configuration, headers, or
-    exception objects that may retain request data.
+    exception objects that may retain request data.  ``memories`` (when not
+    ``None``) renders the MemoryManager write-back section.
     """
     print("\n=== 投资案例摘要 ===", file=stream)
     print(f"项目: {case_data['project']}", file=stream)
@@ -497,6 +503,13 @@ def render_execution(
         json.dumps(validation.policy_result, ensure_ascii=False, indent=2),
         file=stream,
     )
+
+    if memories is not None:
+        print("\n=== Agno 记忆写入 ===", file=stream)
+        print(f"MemoryManager 写入 {len(memories)} 条记忆（user_id={DEMO_USER_ID}）:", file=stream)
+        for memory in memories:
+            text = getattr(memory, "memory", str(memory))
+            print(f"- {text}", file=stream)
 
     print(f"\nDemo status: {'PASS' if validation.ok else 'FAIL'}", file=stream)
     for error in validation.errors:
@@ -553,11 +566,18 @@ def build_agent(
     context: AgentContext,
     case_data: Dict[str, Any],
     debug: bool = False,
-) -> Any:
+    enable_memory: bool = False,
+) -> Tuple[Any, Any]:
     """
     Build the full-stack Agno 2.9 Agent: both Toolkits as ``tools``,
     ``AgnoContextStore`` as ``db``, and ``AgnoKnowledgeGraph`` as
     ``knowledge`` with the fixture's due-diligence documents ingested.
+
+    ``enable_memory`` turns on ``update_memory_on_run`` so Agno's
+    ``MemoryManager`` extracts user memories through the agent's own model —
+    only meaningful with a real model (live mode); scripted offline models
+    cannot serve the manager's extraction calls.  Returns ``(agent, db_store)``
+    so the caller can read the written memories back.
     """
     from agno.agent import Agent
     from agno.models.deepseek import DeepSeek
@@ -567,22 +587,25 @@ def build_agent(
     knowledge = AgnoKnowledgeGraph(context_graph=context.knowledge_graph)
     knowledge.load(texts=list(case_data["documents"]))
 
+    db_store = AgnoContextStore(knowledge_graph=context.knowledge_graph)
     model = DeepSeek(
         id=MODEL_ID,
         use_thinking=True,
         max_retries=1,
         timeout=60.0,
     )
-    return Agent(
+    agent = Agent(
         name="Semantica Investment Committee",
         model=model,
         tools=[kg_toolkit, decision_toolkit],
-        db=AgnoContextStore(knowledge_graph=context.knowledge_graph),
+        db=db_store,
         knowledge=knowledge,
         instructions=build_instructions(case_data),
         markdown=True,
+        update_memory_on_run=enable_memory,
         debug_mode=debug,
     )
+    return agent, db_store
 
 
 class _SimulatedTool:
@@ -965,6 +988,9 @@ def build_committee(
         tools=[kg, analyst_decisions],
         db=shared.bind_agent("analyst"),
         markdown=True,
+        # MemoryManager extraction needs a real model — live only; scripted
+        # offline models cannot serve its calls.
+        update_memory_on_run=live,
         debug_mode=debug,
         **analyst_kwargs,
     )
@@ -974,6 +1000,7 @@ def build_committee(
         tools=[compliance_kit],
         db=shared.bind_agent("compliance"),
         markdown=True,
+        update_memory_on_run=live,
         debug_mode=debug,
         **compliance_kwargs,
     )
@@ -996,13 +1023,14 @@ def execute_demo(
     live: bool = False,
     committee: bool = False,
     case_path: Path = DEFAULT_CASE_PATH,
-) -> Tuple[Dict[str, Any], Any, ValidationResult]:
+) -> Tuple[Dict[str, Any], Any, ValidationResult, List[Any]]:
     """
     Seed the demo data, run (live DeepSeek or offline simulation), and
     validate the governed trace.  With ``committee=True`` the run is executed
     by the investment-committee ``Team`` and checked against team-level
-    invariants.  Returns the case data, the run output, and the validation
-    result.
+    invariants.  Returns the case data, the run output, the validation
+    result, and the user memories written by Agno's MemoryManager (live
+    mode only — empty offline).
     """
     from integrations.agno import (
         AGNO_TOOLKITS_AVAILABLE,
@@ -1033,27 +1061,49 @@ def execute_demo(
         )
         team = build_committee(shared, case_data, live=live, debug=debug)
         try:
-            run_output = team.run(case_data["request_zh"], stream=False)
+            run_output = team.run(
+                case_data["request_zh"], stream=False, user_id=DEMO_USER_ID
+            )
         except Exception as exc:
             raise DemoModelError(
                 f"DeepSeek request failed: {type(exc).__name__}"
             ) from exc
         validation = validate_team_run(run_output, context)
-        return case_data, run_output, validation
+        memories = _read_user_memories(shared.bind_agent("analyst")) if live else []
+        return case_data, run_output, validation, memories
 
     if live:
-        agent = build_agent(kg_toolkit, decision_toolkit, context, case_data, debug=debug)
+        agent, db_store = build_agent(
+            kg_toolkit, decision_toolkit, context, case_data,
+            debug=debug, enable_memory=True,
+        )
         try:
-            run_output = agent.run(case_data["request_zh"], stream=False)
+            run_output = agent.run(
+                case_data["request_zh"], stream=False, user_id=DEMO_USER_ID
+            )
         except Exception as exc:
             raise DemoModelError(
                 f"DeepSeek request failed: {type(exc).__name__}"
             ) from exc
+        memories = _read_user_memories(db_store)
     else:
         run_output = _simulate_run(case_data, kg_toolkit, decision_toolkit)
+        memories = []
 
     validation = validate_run(run_output, context)
-    return case_data, run_output, validation
+    return case_data, run_output, validation, memories
+
+
+def _read_user_memories(db_store: Any) -> List[Any]:
+    """Read back the memories MemoryManager wrote for the demo user."""
+    try:
+        memories = db_store.get_user_memories(user_id=DEMO_USER_ID)
+    except Exception as exc:
+        logger.warning("memory read-back failed: %s", exc)
+        return []
+    if isinstance(memories, tuple):  # (rows, total_count) when deserialize=False
+        memories = memories[0]
+    return list(memories or [])
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1085,7 +1135,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        case_data, run_output, validation = execute_demo(
+        case_data, run_output, validation, memories = execute_demo(
             debug=args.debug, live=args.live, committee=args.committee,
             case_path=args.case,
         )
@@ -1111,7 +1161,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             traceback.print_exc()
         return 4
 
-    render_execution(case_data, run_output, validation, stream=sys.stdout, debug=args.debug)
+    render_execution(
+        case_data, run_output, validation,
+        stream=sys.stdout, debug=args.debug, memories=memories,
+    )
+    if args.live and not memories:
+        print(
+            "Warning: MemoryManager wrote 0 memories this run "
+            "(extraction is model-dependent).",
+            file=sys.stderr,
+        )
     if not validation.ok:
         return 4
     return 0
