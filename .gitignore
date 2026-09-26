@@ -46,6 +46,7 @@ venv/
 ENV/
 .venv/
 .venv-cassandra/
+.senmantica/
 build/
 develop-eggs/
 dist/
@@ -126,3 +127,6 @@ demo_out/
 
 # Worktrees
 .worktrees/
+
+# Local agent tooling state
+.gstack/
