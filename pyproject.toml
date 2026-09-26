@@ -152,7 +152,7 @@ models-huggingface = [
 ]
 embeddings-local = [
   "sentence-transformers>=2.2.0",
-  "fastembed>=0.2.0",
+  "fastembed>=0.2.7",
   "onnxruntime>=1.20.1",
   "tokenizers>=0.15.0"
 ]
@@ -237,7 +237,7 @@ gpu = [
 ]
 
 # ---- Agentic Framework Integrations ----
-agno = ["agno>=1.0.0"]
+agno = ["agno==3.0.11"]
 # There is deliberately no `crewai` extra: crewai hard-requires
 # `chromadb~=1.1.0` and `json-repair~=0.25.2`, both of which carry critical
 # advisories (CVE-2026-45829/45830/45831/45833, GHSA-xf7x-x43h-rpqh) with no

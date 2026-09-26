@@ -102,7 +102,7 @@ class BGEStore(ProviderStore):
         """Initialize BGE store."""
         super().__init__(**config)
 
-        self.model_name = config.get("model_name", "BAAI/bge-small-en-v1.5")
+        self.model_name = config.get("model_name", "BAAI/bge-m3")
         self.model = None
 
         self._initialize_model()
@@ -198,7 +198,7 @@ class FastEmbedStore(ProviderStore):
         """Initialize FastEmbed store."""
         super().__init__(**config)
 
-        self.model_name = config.get("model_name", "BAAI/bge-small-en-v1.5")
+        self.model_name = config.get("model_name", "BAAI/bge-m3")
         self.model = None
 
         self._initialize_model()

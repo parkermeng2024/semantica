@@ -142,7 +142,7 @@ def generate_embeddings(
 
 
 def embed_text(
-    text: Union[str, List[str]], method: str = "sentence_transformers", **kwargs
+    text: Union[str, List[str]], method: str = "ollama", **kwargs
 ) -> np.ndarray:
     """
     Generate text embeddings (convenience function).
@@ -151,7 +151,8 @@ def embed_text(
 
     Args:
         text: Input text string or list of texts
-        method: Text embedding method (default: "sentence_transformers")
+        method: Text embedding method (default: "ollama")
+            - "ollama": Local Ollama server embedding (default model: bge-m3)
             - "sentence_transformers": Sentence-transformers model-based embedding
             - "fastembed": FastEmbed model-based embedding (fast and efficient)
             - "fallback": Hash-based fallback embedding
@@ -185,9 +186,13 @@ def embed_text(
             config["method"] = "fastembed"
             # Use FastEmbed default model if not specified
             if "model_name" not in config:
-                config["model_name"] = "BAAI/bge-small-en-v1.5"
+                config["model_name"] = "BAAI/bge-m3"
         elif method == "sentence_transformers":
             config["method"] = "sentence_transformers"
+        elif method == "ollama":
+            config["method"] = "ollama"
+            if "model_name" not in config:
+                config["model_name"] = "bge-m3"
 
         embedder = TextEmbedder(**config)
 
@@ -375,6 +380,7 @@ method_registry.register("generation", "default", generate_embeddings)
 method_registry.register("generation", "text", generate_embeddings)
 method_registry.register("text", "sentence_transformers", embed_text)
 method_registry.register("text", "fastembed", embed_text)
+method_registry.register("text", "ollama", embed_text)
 method_registry.register("text", "fallback", embed_text)
 method_registry.register("similarity", "cosine", calculate_similarity)
 method_registry.register("similarity", "euclidean", calculate_similarity)

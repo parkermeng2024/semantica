@@ -44,7 +44,7 @@ class TestEmbeddingProviders(unittest.TestCase):
             embedding = embedder.embed_text(text)
             self.assertIsInstance(embedding, np.ndarray)
             print(f"Embedding shape: {embedding.shape}")
-            # FastEmbed default is usually BAAI/bge-small-en-v1.5 (384 dim) or similar
+            # FastEmbed default is BAAI/bge-m3 (1024 dim)
             self.assertTrue(len(embedding) > 0)
         except ImportError:
             print("FastEmbed not installed, skipping.")

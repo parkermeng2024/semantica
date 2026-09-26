@@ -120,12 +120,12 @@ def _find_span_in_text(needle: str, text: str, occupied: set) -> tuple:
 class LLMExtraction:
     """LLM-based extraction and enhancement."""
 
-    def __init__(self, provider: str = "openai", **config):
+    def __init__(self, provider: str = "deepseek", **config):
         """
         Initialize LLM extraction.
 
         Args:
-            provider: LLM provider ("openai", "gemini", "groq", "anthropic", "ollama", "huggingface_llm")
+            provider: LLM provider ("deepseek", "openai", "gemini", "groq", "anthropic", "ollama", "huggingface_llm")
             **config: Configuration options:
                 - model: Model name (default depends on provider)
                 - api_key: API key (from environment if not provided)

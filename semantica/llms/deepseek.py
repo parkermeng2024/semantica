@@ -23,13 +23,13 @@ class DeepSeek:
 
     Example:
         >>> from semantica.llms import DeepSeek
-        >>> llm = DeepSeek(model="deepseek-chat", api_key="your-key")
+        >>> llm = DeepSeek(model="deepseek-v4.1-flash", api_key="your-key")
         >>> response = llm.generate("What is AI?")
     """
 
     def __init__(
         self,
-        model: str = "deepseek-chat",
+        model: str = "deepseek-v4.1-flash",
         api_key: Optional[str] = None,
         **kwargs
     ):
@@ -37,7 +37,7 @@ class DeepSeek:
         Initialize DeepSeek provider.
 
         Args:
-            model: Model name (default: "deepseek-chat")
+            model: Model name (default: "deepseek-v4.1-flash")
             api_key: DeepSeek API key (default: from DEEPSEEK_API_KEY env var)
             **kwargs: Additional provider options
         """

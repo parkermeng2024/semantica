@@ -1101,7 +1101,7 @@ engine = OntologyEngine()
 ontology = engine.from_text(
     text,
     provider="deepseek",
-    model="deepseek-chat",
+    model="deepseek-v4.1-flash",
     name="EmploymentOntology",
     base_uri="https://example.org/employment/",
 )

@@ -127,7 +127,7 @@ def get_vector_store() -> Any:
                 )
             config["db_path"] = db_path
         # VectorStore defaults to dimension 768, which does not match the
-        # default embedding model (all-MiniLM-L6-v2 = 384, hash fallback
+        # default embedding model (BAAI/bge-m3 = 1024, hash fallback
         # = 128).  Always derive it from the embedder so store and
         # queries stay consistent.
         embedder = get_embedder()

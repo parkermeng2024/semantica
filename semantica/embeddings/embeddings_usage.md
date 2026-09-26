@@ -39,21 +39,26 @@ print(f"Embedding dimension: {len(embeddings)}")
 
 ## Text Embedding
 
-### FastEmbed Embedding (Default)
+### Ollama Embedding (Default)
 
-Semantica uses FastEmbed by default for efficient, local embedding generation.
+Semantica uses a local Ollama server by default for embedding generation,
+with `bge-m3` (1024-dimensional, multilingual) as the default model.
+Make sure `ollama serve` is running and the model is pulled
+(`ollama pull bge-m3`). The server URL can be configured with the
+`ollama_base_url` config key or the `OLLAMA_BASE_URL` environment variable
+(default: `http://localhost:11434`).
 
 ```python
 from semantica.embeddings import TextEmbedder
 
-# Create text embedder (uses FastEmbed by default)
+# Create text embedder (uses Ollama with bge-m3 by default)
 embedder = TextEmbedder()
 
 # Single text embedding
 embedding = embedder.embed_text("The quick brown fox jumps over the lazy dog")
 print(f"Embedding shape: {embedding.shape}")
 
-# Batch text embedding (FastEmbed is optimized for batch processing)
+# Batch text embedding
 texts = [
     "Python is a programming language",
     "Machine learning is fascinating",
@@ -61,6 +66,20 @@ texts = [
 ]
 embeddings = embedder.embed_batch(texts)
 print(f"Batch embeddings shape: {embeddings.shape}")  # (3, embedding_dim)
+```
+
+### FastEmbed Embedding
+
+FastEmbed runs quantized ONNX models locally without a server.
+Note that recent FastEmbed releases do not support `bge-m3`; use the Ollama
+method above for bge-m3.
+
+```python
+from semantica.embeddings import TextEmbedder
+
+embedder = TextEmbedder(method="fastembed", model_name="BAAI/bge-small-en-v1.5")
+embedding = embedder.embed_text("The quick brown fox jumps over the lazy dog")
+print(f"Embedding shape: {embedding.shape}")
 ```
 
 ### Sentence-Transformers Embedding
@@ -89,7 +108,10 @@ print(f"Embedding dimension: {embedder.get_embedding_dimension()}")
 ```python
 from semantica.embeddings.methods import embed_text
 
-# Using FastEmbed (Default, fast and efficient)
+# Using Ollama (Default, local server, bge-m3)
+emb = embed_text("Hello world", method="ollama")
+
+# Using FastEmbed (local, no server required)
 emb = embed_text("Hello world", method="fastembed")
 
 # Using sentence-transformers (Legacy/Alternative)

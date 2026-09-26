@@ -78,7 +78,7 @@ class EmbeddingGenerator:
         self.text_embedder = TextEmbedder(**text_config)
 
         # List of supported embedding models
-        self.supported_models = ["sentence-transformers", "openai", "bge", "fastembed"]
+        self.supported_models = ["sentence-transformers", "openai", "bge", "fastembed", "ollama"]
 
         # Initialize progress tracker
         from ..utils.progress_tracker import get_progress_tracker

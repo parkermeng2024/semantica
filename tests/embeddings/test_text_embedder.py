@@ -32,12 +32,16 @@ class TestTextEmbedder(unittest.TestCase):
         self.fe_avail_patcher.stop()
 
     def test_init_default(self):
-        """Test initialization with default parameters (fastembed)."""
-        embedder = TextEmbedder()
-        self.assertEqual(embedder.method, "fastembed")
-        self.assertEqual(embedder.model_name, "BAAI/bge-small-en-v1.5")
-        self.mock_fe_class.assert_called_once()
-        self.assertIsNotNone(embedder.fastembed_model)
+        """Test initialization with default parameters (ollama)."""
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=TestOllamaEmbedder()._mock_urlopen([[0.1] * 1024]),
+        ):
+            embedder = TextEmbedder()
+        self.assertEqual(embedder.method, "ollama")
+        self.assertEqual(embedder.model_name, "BAAI/bge-m3")
+        self.assertIsNotNone(embedder.ollama_base_url)
+        self.assertIsNone(embedder.fastembed_model)
         self.assertIsNone(embedder.model)
 
     def test_init_sentence_transformers(self):
@@ -132,13 +136,15 @@ class TestTextEmbedder(unittest.TestCase):
         # Unpatch availability to simulate missing libraries
         self.st_avail_patcher.stop()
         self.fe_avail_patcher.stop()
-        
+
         with patch('semantica.embeddings.text_embedder.SENTENCE_TRANSFORMERS_AVAILABLE', False), \
-             patch('semantica.embeddings.text_embedder.FASTEMBED_AVAILABLE', False):
-            
+             patch('semantica.embeddings.text_embedder.FASTEMBED_AVAILABLE', False), \
+             patch('urllib.request.urlopen', side_effect=ConnectionRefusedError("down")):
+
             embedder = TextEmbedder()
             self.assertIsNone(embedder.model)
             self.assertIsNone(embedder.fastembed_model)
+            self.assertIsNone(embedder.ollama_base_url)
             
             # Should use fallback (hashing)
             result = embedder.embed_text("test")
@@ -152,13 +158,97 @@ class TestTextEmbedder(unittest.TestCase):
 
     def test_set_model(self):
         """Test dynamic model switching."""
-        embedder = TextEmbedder() # Default FastEmbed
-        self.assertEqual(embedder.method, "fastembed")
-        
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=TestOllamaEmbedder()._mock_urlopen([[0.1] * 1024]),
+        ):
+            embedder = TextEmbedder()  # Default Ollama
+        self.assertEqual(embedder.method, "ollama")
+
         embedder.set_model(method="sentence_transformers", model_name="new-model")
         self.assertEqual(embedder.method, "sentence_transformers")
         self.assertEqual(embedder.model_name, "new-model")
         self.mock_st_class.assert_called()
+
+class TestOllamaEmbedder(unittest.TestCase):
+    """Tests for the Ollama embedding method (HTTP calls mocked)."""
+
+    def _mock_urlopen(self, embeddings):
+        """Build a urlopen replacement returning the given embeddings as JSON."""
+        import json
+
+        def fake_urlopen(request, timeout=None):
+            payload = json.loads(request.data.decode("utf-8"))
+            n = len(payload["input"])
+            body = json.dumps({"embeddings": embeddings[:n]}).encode("utf-8")
+            response = MagicMock()
+            response.read.return_value = body
+            response.__enter__ = lambda s: s
+            response.__exit__ = MagicMock(return_value=False)
+            return response
+
+        return fake_urlopen
+
+    def test_init_and_embed(self):
+        """Ollama init probes the model; embed_text returns a normalized vector."""
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=self._mock_urlopen([[3.0, 4.0, 0.0]]),
+        ):
+            embedder = TextEmbedder(method="ollama", model_name="bge-m3")
+            self.assertEqual(embedder.get_method(), "ollama")
+            self.assertEqual(embedder.get_embedding_dimension(), 3)
+
+            result = embedder.embed_text("hello")
+            self.assertIsInstance(result, np.ndarray)
+            # [3, 4, 0] normalized -> [0.6, 0.8, 0]
+            self.assertTrue(np.allclose(result, [0.6, 0.8, 0.0]))
+
+    def test_hub_prefix_stripped(self):
+        """Hub-prefixed names like BAAI/bge-m3 map to the bare Ollama name."""
+        import json
+        import urllib.request
+
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            payload = json.loads(request.data.decode("utf-8"))
+            seen["model"] = payload["model"]
+            body = json.dumps(
+                {"embeddings": [[0.1] * 4 for _ in payload["input"]]}
+            ).encode("utf-8")
+            response = MagicMock()
+            response.read.return_value = body
+            response.__enter__ = lambda s: s
+            response.__exit__ = MagicMock(return_value=False)
+            return response
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            embedder = TextEmbedder(method="ollama", model_name="BAAI/bge-m3")
+        self.assertEqual(seen["model"], "bge-m3")
+        self.assertEqual(embedder.get_embedding_dimension(), 4)
+
+    def test_embed_batch(self):
+        """embed_batch sends all texts in one request and normalizes rows."""
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=self._mock_urlopen([[1.0, 0.0], [0.0, 2.0]]),
+        ):
+            embedder = TextEmbedder(method="ollama", model_name="bge-m3")
+            results = embedder.embed_batch(["a", "b"])
+        self.assertEqual(results.shape, (2, 2))
+        self.assertTrue(np.allclose(results, [[1.0, 0.0], [0.0, 1.0]]))
+
+    def test_fallback_when_server_down(self):
+        """Unreachable Ollama server falls back to hash-based embeddings."""
+        with patch(
+            "urllib.request.urlopen", side_effect=ConnectionRefusedError("down")
+        ):
+            embedder = TextEmbedder(method="ollama", model_name="bge-m3")
+            self.assertIsNone(embedder.ollama_base_url)
+            self.assertEqual(embedder.get_method(), "fallback")
+            result = embedder.embed_text("hello")
+            self.assertIsInstance(result, np.ndarray)
 
 if __name__ == '__main__':
     unittest.main()

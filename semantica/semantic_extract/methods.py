@@ -485,10 +485,9 @@ def get_text_embedder():
 
         try:
             from ..embeddings.text_embedder import TextEmbedder
-            # Use a lightweight but effective model for speed/accuracy balance
-            # BAAI/bge-small-en-v1.5 is excellent for semantic similarity
+            # BAAI/bge-m3 is the default model for semantic similarity
             # Enable caching within the embedder if supported, or use our own
-            _embedder_cache = TextEmbedder(model_name="BAAI/bge-small-en-v1.5", normalize=True)
+            _embedder_cache = TextEmbedder(model_name="BAAI/bge-m3", normalize=True)
             logger.info("Loaded TextEmbedder for high-accuracy similarity")
             return _embedder_cache
         except Exception as e:
@@ -1228,7 +1227,7 @@ def extract_entities_huggingface(
 
 def extract_entities_llm(
     text: str,
-    provider: str = "openai",
+    provider: str = "deepseek",
     model: Optional[str] = None,
     silent_fail: bool = False,
     max_text_length: Optional[int] = None,
@@ -1961,7 +1960,7 @@ def extract_relations_huggingface(
 def extract_relations_llm(
     text: str,
     entities: List[Entity],
-    provider: str = "openai",
+    provider: str = "deepseek",
     model: Optional[str] = None,
     silent_fail: bool = False,
     max_text_length: Optional[int] = None,
@@ -2639,7 +2638,7 @@ def extract_triplets_llm(
     text: str,
     entities: Optional[List[Entity]] = None,
     relations: Optional[List[Relation]] = None,
-    provider: str = "openai",
+    provider: str = "deepseek",
     model: Optional[str] = None,
     silent_fail: bool = False,
     max_text_length: Optional[int] = None,

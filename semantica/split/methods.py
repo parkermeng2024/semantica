@@ -588,7 +588,7 @@ def split_by_words(
 def split_semantic_transformer(
     text: str,
     chunk_size: int = 1000,
-    model: str = "all-MiniLM-L6-v2",
+    model: str = "BAAI/bge-m3",
     similarity_threshold: float = 0.7,
     **kwargs,
 ) -> List[Chunk]:
@@ -733,7 +733,7 @@ def _cosine_similarity(vec1, vec2):
 def split_llm(
     text: str,
     chunk_size: int = 1000,
-    provider: str = "openai",
+    provider: str = "deepseek",
     model: Optional[str] = None,
     **kwargs,
 ) -> List[Chunk]:
@@ -1373,7 +1373,7 @@ def split_ontology_aware(
 def split_embedding_semantic(
     text: str,
     chunk_size: int = 1000,
-    model: str = "all-MiniLM-L6-v2",
+    model: str = "BAAI/bge-m3",
     similarity_threshold: float = 0.7,
     **kwargs,
 ) -> List[Chunk]:

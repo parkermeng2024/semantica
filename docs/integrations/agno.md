@@ -21,6 +21,10 @@ pip install "semantica[agno,graph-falkordb]"
 pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
 ```
 
+The examples below use DeepSeek (`deepseek-v4.1-flash`) as the agent model.
+Set `DEEPSEEK_API_KEY` before running them; any other Agno-supported model
+works as a drop-in replacement.
+
 
 ## Components at a Glance
 
@@ -40,7 +44,7 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
     ```python
     from agno.agent import Agent
     from agno.memory import AgentMemory
-    from agno.models.openai import OpenAIChat
+    from agno.models.deepseek import DeepSeek
     from semantica.context import ContextGraph
     from semantica.vector_store import VectorStore
     from integrations.agno import AgnoContextStore
@@ -54,7 +58,7 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
     )
 
     agent = Agent(
-        model=OpenAIChat(id="gpt-4o"),
+        model=DeepSeek(id="deepseek-v4.1-flash"),
         memory=AgentMemory(db=store),
         description="A financially aware assistant with persistent decision intelligence.",
     )
@@ -72,7 +76,7 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
 
     ```python
     from agno.agent import Agent
-    from agno.models.openai import OpenAIChat
+    from agno.models.deepseek import DeepSeek
     from semantica.kg import GraphBuilder
     from semantica.semantic_extract import NERExtractor, RelationExtractor
     from integrations.agno import AgnoKnowledgeGraph
@@ -86,7 +90,7 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
     kg.load("regulatory_docs/", recursive=True)
     kg.load(texts=["Basel IV capital requirements apply from January 2026."])
 
-    agent = Agent(model=OpenAIChat(id="gpt-4o"), knowledge=kg, search_knowledge=True)
+    agent = Agent(model=DeepSeek(id="deepseek-v4.1-flash"), knowledge=kg, search_knowledge=True)
     ```
 
     **Ingestion:** `parse → NER → relation extract → graph build → vector index`
@@ -103,13 +107,13 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
 
     ```python
     from agno.agent import Agent
-    from agno.models.openai import OpenAIChat
+    from agno.models.deepseek import DeepSeek
     from semantica.context import AgentContext
     from integrations.agno import AgnoDecisionKit
 
     ctx   = AgentContext(decision_tracking=True)
     agent = Agent(
-        model=OpenAIChat(id="gpt-4o"),
+        model=DeepSeek(id="deepseek-v4.1-flash"),
         tools=[AgnoDecisionKit(context=ctx)],
         show_tool_calls=True,
     )
@@ -130,11 +134,11 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
 
     ```python
     from agno.agent import Agent
-    from agno.models.openai import OpenAIChat
+    from agno.models.deepseek import DeepSeek
     from integrations.agno import AgnoKGToolkit
 
     agent = Agent(
-        model=OpenAIChat(id="gpt-4o"),
+        model=DeepSeek(id="deepseek-v4.1-flash"),
         tools=[AgnoKGToolkit()],
         show_tool_calls=True,
     )
@@ -156,7 +160,7 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
     ```python
     from agno.agent import Agent
     from agno.team import Team
-    from agno.models.openai import OpenAIChat
+    from agno.models.deepseek import DeepSeek
     from semantica.context import ContextGraph
     from semantica.vector_store import VectorStore
     from integrations.agno import AgnoSharedContext, AgnoDecisionKit, AgnoKGToolkit
@@ -169,13 +173,13 @@ pip install "semantica[agno,graph-neo4j,vectorstore-pgvector]"
 
     research_agent = Agent(
         name="Researcher",
-        model=OpenAIChat(id="gpt-4o"),
+        model=DeepSeek(id="deepseek-v4.1-flash"),
         memory=shared.bind_agent("researcher"),
         tools=[AgnoKGToolkit(context=shared)],
     )
     decision_agent = Agent(
         name="Analyst",
-        model=OpenAIChat(id="gpt-4o"),
+        model=DeepSeek(id="deepseek-v4.1-flash"),
         memory=shared.bind_agent("analyst"),
         tools=[AgnoDecisionKit(context=shared)],
     )

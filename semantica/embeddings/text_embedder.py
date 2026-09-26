@@ -7,6 +7,8 @@ and fallback methods.
 
 Key Features:
     - Sentence-transformers integration for high-quality embeddings
+    - FastEmbed integration for efficient local embeddings
+    - Ollama integration for local server-based embeddings (e.g. bge-m3)
     - Batch processing for multiple texts
     - Sentence-level embedding extraction
     - Fallback embedding methods when dependencies unavailable
@@ -22,6 +24,9 @@ Author: Semantica Contributors
 License: MIT
 """
 
+import json
+import os
+import urllib.request
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
@@ -74,10 +79,10 @@ class TextEmbedder:
 
     def __init__(
         self,
-        model_name: str = "BAAI/bge-small-en-v1.5",
+        model_name: str = "BAAI/bge-m3",
         device: str = "cpu",
         normalize: bool = True,
-        method: str = "fastembed",
+        method: str = "ollama",
         **config,
     ):
         """
@@ -88,13 +93,16 @@ class TextEmbedder:
 
         Args:
             model_name: Name of model to use
-                       (default: "BAAI/bge-small-en-v1.5" for FastEmbed,
-                        "all-MiniLM-L6-v2" for sentence-transformers)
+                       (default: "BAAI/bge-m3"; for Ollama the hub prefix is
+                        stripped and the bare name "bge-m3" is used)
             device: Device to run model on - "cpu" or "cuda" (default: "cpu")
                    Note: FastEmbed doesn't use device parameter
             normalize: Whether to normalize embeddings to unit vectors (default: True)
-            method: Embedding method - "fastembed" or "sentence_transformers"
-                   (default: "fastembed")
+            method: Embedding method - "ollama", "fastembed", or "sentence_transformers"
+                   (default: "ollama"). "ollama" uses a local Ollama server
+                   (configure via config key "ollama_base_url" or the
+                   OLLAMA_BASE_URL environment variable, default
+                   "http://localhost:11434").
             **config: Additional configuration options
         """
         self.logger = get_logger("text_embedder")
@@ -109,6 +117,7 @@ class TextEmbedder:
         # Initialize models (will be None if unavailable)
         self.model = None
         self.fastembed_model = None
+        self.ollama_base_url = None
         self.embedding_dimension = None
 
         # Initialize progress tracker
@@ -127,9 +136,12 @@ class TextEmbedder:
         # Clear previous models to avoid conflicts when switching
         self.model = None
         self.fastembed_model = None
+        self.ollama_base_url = None
         self.embedding_dimension = None
 
-        if self.method == "fastembed":
+        if self.method == "ollama":
+            self._initialize_ollama()
+        elif self.method == "fastembed":
             if FASTEMBED_AVAILABLE:
                 try:
                     # Use model_name from config or default for FastEmbed
@@ -144,7 +156,7 @@ class TextEmbedder:
                         test_emb = list(self.fastembed_model.embed(["test"]))[0]
                         self.embedding_dimension = len(test_emb)
                     except Exception:
-                        self.embedding_dimension = 384
+                        self.embedding_dimension = 1024  # BAAI/bge-m3 dimension
                         
                     self.logger.info(
                         f"Loaded FastEmbed model: {fastembed_model_name} (dim: {self.embedding_dimension})"
@@ -190,12 +202,65 @@ class TextEmbedder:
         
         self.logger.debug(f"Initialized text embedder with dimension: {self.embedding_dimension}")
 
+    def _initialize_ollama(self) -> None:
+        """
+        Initialize the Ollama embedding backend.
+
+        Talks to a local Ollama server over HTTP (no Python dependency).
+        Probes the model with a test embedding, which both verifies that the
+        server is reachable and yields the embedding dimension.
+        """
+        base_url = (
+            self.config.get("ollama_base_url")
+            or os.environ.get("OLLAMA_BASE_URL")
+            or "http://localhost:11434"
+        ).rstrip("/")
+        try:
+            probe = self._ollama_embed(base_url, ["test"])[0]
+            self.embedding_dimension = len(probe)
+            self.ollama_base_url = base_url
+            self.logger.info(
+                f"Loaded Ollama embedding model: {self._ollama_model_name()} "
+                f"(server: {base_url}, dim: {self.embedding_dimension})"
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to reach Ollama at '{base_url}' with model "
+                f"'{self._ollama_model_name()}': {e}. Make sure `ollama serve` "
+                "is running and the model is pulled. "
+                "Using fallback embedding method."
+            )
+            self.ollama_base_url = None
+
+    def _ollama_model_name(self) -> str:
+        """Ollama model names are bare (e.g. "bge-m3"); strip hub prefixes like "BAAI/"."""
+        return self.model_name.split("/")[-1]
+
+    def _ollama_embed(self, base_url: str, texts: List[str]) -> np.ndarray:
+        """Embed texts via the Ollama /api/embed endpoint."""
+        payload = json.dumps(
+            {"model": self._ollama_model_name(), "input": texts}
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"{base_url}/api/embed",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=120) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        embeddings = data.get("embeddings")
+        if not embeddings:
+            raise ProcessingError(
+                f"Ollama returned no embeddings for model '{self._ollama_model_name()}'"
+            )
+        return np.array(embeddings, dtype=np.float32)
+
     def set_model(self, method: str, model_name: str, **config) -> None:
         """
         Dynamically switch embedding model.
         
         Args:
-            method: New method ("sentence_transformers" or "fastembed")
+            method: New method ("sentence_transformers", "fastembed", or "ollama")
             model_name: New model name
             **config: Additional configuration
         """
@@ -253,7 +318,12 @@ class TextEmbedder:
                 raise ProcessingError("Text cannot be empty or whitespace-only")
 
             # Use model if available, otherwise fallback
-            if self.fastembed_model:
+            if self.ollama_base_url:
+                self.progress_tracker.update_tracking(
+                    tracking_id, message="Using Ollama embedding model..."
+                )
+                result = self._embed_with_ollama(text, **options)
+            elif self.fastembed_model:
                 self.progress_tracker.update_tracking(
                     tracking_id, message="Using FastEmbed model..."
                 )
@@ -301,6 +371,24 @@ class TextEmbedder:
         )
 
         return embeddings[0]
+
+    def _embed_with_ollama(self, text: str, **options) -> np.ndarray:
+        """
+        Embed text using a local Ollama server.
+
+        Args:
+            text: Input text to embed
+            **options: Unused (for compatibility)
+
+        Returns:
+            np.ndarray: Embedding vector from the Ollama model
+        """
+        embedding = self._ollama_embed(self.ollama_base_url, [text])[0]
+        if self.normalize:
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
+        return embedding
 
     def _embed_with_fastembed(self, text: str, **options) -> np.ndarray:
         """
@@ -397,7 +485,15 @@ class TextEmbedder:
 
         self.logger.debug(f"Generating embeddings for {len(texts)} text(s)")
 
-        if self.fastembed_model:
+        if self.ollama_base_url:
+            # Ollama /api/embed accepts a list input for batch encoding
+            embeddings_array = self._ollama_embed(self.ollama_base_url, texts)
+            if self.normalize:
+                norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+                norms[norms == 0] = 1  # Avoid division by zero
+                embeddings_array = embeddings_array / norms
+            return embeddings_array
+        elif self.fastembed_model:
             # Use FastEmbed's efficient batch encoding
             embeddings = list(self.fastembed_model.embed(texts))
             embeddings_array = np.array(embeddings, dtype=np.float32)
@@ -476,8 +572,9 @@ class TextEmbedder:
 
         Returns:
             int: Embedding dimension (number of features in embedding vector).
-                 - FastEmbed: Dimension from loaded model (typically 384-768)
-                 - Sentence-transformers: Dimension from loaded model (typically 384-768)
+                 - Ollama: Dimension probed from the served model (bge-m3 = 1024)
+                 - FastEmbed: Dimension from loaded model (bge-m3 = 1024)
+                 - Sentence-transformers: Dimension from loaded model (typically 384-1024)
                  - Fallback: 128 (hash-based embedding dimension)
 
         Example:
@@ -492,14 +589,16 @@ class TextEmbedder:
         Get the active embedding method being used.
 
         Returns:
-            str: Active method name - "fastembed", "sentence_transformers", or "fallback"
+            str: Active method name - "fastembed", "sentence_transformers", "ollama", or "fallback"
 
         Example:
             >>> embedder = TextEmbedder(method="fastembed")
             >>> method = embedder.get_method()
             >>> print(f"Using method: {method}")
         """
-        if self.fastembed_model:
+        if self.ollama_base_url:
+            return "ollama"
+        elif self.fastembed_model:
             return "fastembed"
         elif self.model:
             return "sentence_transformers"
@@ -527,11 +626,14 @@ class TextEmbedder:
             >>> print(f"Dimension: {info['dimension']}")
         """
         method = self.get_method()
-        model_loaded = (
-            self.fastembed_model is not None
-            if method == "fastembed"
-            else (self.model is not None if method == "sentence_transformers" else False)
-        )
+        if method == "fastembed":
+            model_loaded = self.fastembed_model is not None
+        elif method == "sentence_transformers":
+            model_loaded = self.model is not None
+        elif method == "ollama":
+            model_loaded = self.ollama_base_url is not None
+        else:
+            model_loaded = False
 
         info = {
             "method": method,

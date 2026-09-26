@@ -7,7 +7,7 @@ from ..semantic_extract.providers import create_provider
 
 
 class LLMOntologyGenerator:
-    def __init__(self, provider: str = "openai", model: Optional[str] = None, **config):
+    def __init__(self, provider: str = "deepseek", model: Optional[str] = None, **config):
         self.logger = get_logger("llm_ontology_generator")
         self.progress = get_progress_tracker()
         # Ensure progress tracker is enabled

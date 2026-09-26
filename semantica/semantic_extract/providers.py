@@ -70,6 +70,7 @@ License: MIT
 """
 
 import json
+import os
 import threading
 import time
 from typing import Any, Dict, List, Optional, Union, Type
@@ -1311,12 +1312,20 @@ class OllamaProvider(BaseProvider):
 
 class DeepSeekProvider(BaseProvider):
     def __init__(
-        self, api_key: Optional[str] = None, model: str = "deepseek-chat", **kwargs
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.api_key = api_key or config.get_api_key("deepseek")
-        self.base_url = "https://api.deepseek.com/v1"
-        self.model = model
+        self.base_url = (
+            base_url
+            or os.environ.get("DEEPSEEK_BASE_URL")
+            or "https://api.deepseek.com/v1"
+        )
+        self.model = model or os.environ.get("DEEPSEEK_MODEL") or "deepseek-v4.1-flash"
         self.client = None
         self._init_client()
 

@@ -352,7 +352,7 @@ Install with `pip install "semantica[llm-deepseek]"` (or `pip install openai`, s
 ```python
 from semantica.llms import DeepSeek
 
-llm = DeepSeek(model="deepseek-chat", api_key="YOUR_DEEPSEEK_KEY")
+llm = DeepSeek(model="deepseek-v4.1-flash", api_key="YOUR_DEEPSEEK_KEY")
 # api_key falls back to the DEEPSEEK_API_KEY environment variable
 
 if not llm.is_available():

@@ -61,10 +61,24 @@ class TestModelSwitching(unittest.TestCase):
 
     def test_embedding_generator_dynamic_switching(self):
         """Test that EmbeddingGenerator correctly propagates model switches to TextEmbedder."""
-        gen = EmbeddingGenerator()
-        
-        # Default should be fastembed
-        self.assertEqual(gen.get_text_method(), "fastembed")
+        import json
+
+        def fake_urlopen(request, timeout=None):
+            payload = json.loads(request.data.decode("utf-8"))
+            body = json.dumps(
+                {"embeddings": [[0.1] * 4 for _ in payload["input"]]}
+            ).encode("utf-8")
+            response = MagicMock()
+            response.read.return_value = body
+            response.__enter__ = lambda s: s
+            response.__exit__ = MagicMock(return_value=False)
+            return response
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            gen = EmbeddingGenerator()
+
+        # Default should be ollama
+        self.assertEqual(gen.get_text_method(), "ollama")
         
         # Switch via EmbeddingGenerator
         gen.set_text_model(method="sentence_transformers", model_name="new-st-model")

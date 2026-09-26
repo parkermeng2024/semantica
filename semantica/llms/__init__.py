@@ -63,7 +63,7 @@ Example Usage:
     >>> response = ollama.generate("Hello, world!")
     >>>
     >>> # DeepSeek provider
-    >>> deepseek = DeepSeek(model="deepseek-chat", api_key="your-key")
+    >>> deepseek = DeepSeek(model="deepseek-v4.1-flash", api_key="your-key")
     >>> response = deepseek.generate("Hello, world!")
     >>>
     >>> # Novita provider
