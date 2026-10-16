@@ -17,8 +17,8 @@ class TestEmbeddingProviders(unittest.TestCase):
         embedding = embedder.embed_text(text)
         self.assertIsInstance(embedding, np.ndarray)
         print(f"Embedding shape: {embedding.shape}")
-        # Default model is all-MiniLM-L6-v2 which is 384 dim
-        self.assertEqual(len(embedding), 384)
+        # Default model is BAAI/bge-m3 which is 1024 dim
+        self.assertEqual(len(embedding), 1024)
 
     def test_sentence_transformers_custom_model(self):
         print("\nTesting Sentence Transformers (Custom Model: all-mpnet-base-v2)...")
