@@ -115,7 +115,7 @@ documents = [
   "lxml>=6.1.1",
   "beautifulsoup4>=4.15.0"
 ]
-parse-docling = ["docling>=2.107.0"]
+parse-docling = ["docling>=2.132.0"]
 # pdfplumber powers the default PDFParser; not pulled in by any other extra.
 parse-pdf = ["pdfplumber>=0.10.0"]
 
@@ -131,11 +131,13 @@ db-databricks = ["databricks-sdk>=0.60.0", "databricks-sql-connector>=4.0.0"]
 db-arrow = ["pyarrow>=24.0.0"]
 db-salesforce = ["simple-salesforce>=1.12.0"]
 db-redshift = ["redshift-connector>=2.0.0"]
+ingest-dynamics365 = ["msal>=1.20"]
 db-cassandra = ["cassandra-driver>=3.29.0"]
 db-bigquery = ["google-cloud-bigquery>=3.0.0"]
 ingest-looker = ["looker-sdk>=24.0.0"]
 ingest-parquet = ["pyarrow>=24.0.0"]
 ingest-arrow = ["pyarrow>=24.0.0"]
+ingest-tableau = ["tableauserverclient>=0.25"]
 ingest-sap = ["requests>=2.28.0"]
 ingest-servicenow = ["requests>=2.28.0"]
 ingest-airflow = ["requests>=2.28.0"]
@@ -158,6 +160,11 @@ embeddings-local = [
 ]
 nlp-spacy = [
   "spacy>=3.4.0"
+]
+# LanguageDetector (semantica.normalize); without it every text is reported
+# as the default language.
+nlp-langdetect = [
+  "langdetect>=1.0.9"
 ]
 
 # ---- Graph Backends ----
@@ -290,7 +297,7 @@ explorer-lite = [
 # NOTE: there is no ``crewai`` extra to include here — see the comment above
 # the (removed) crewai entry under "Agentic Framework Integrations".
 all = [
-  "semantica[viz,media,infra,cloud,monitoring,watch,llm-all,models-huggingface,embeddings-local,nlp-spacy,documents,ingest-git,graph-embeddings,split-all,graph-all,tripletstore-oxigraph,vectorstore-all,parse-docling,parse-pdf,ingest-parquet,ingest-arrow,shacl,explorer,agno,langchain,google-adk]"
+  "semantica[viz,media,infra,cloud,monitoring,watch,llm-all,models-huggingface,embeddings-local,nlp-spacy,nlp-langdetect,documents,ingest-git,graph-embeddings,split-all,graph-all,tripletstore-oxigraph,vectorstore-all,parse-docling,parse-pdf,ingest-parquet,ingest-arrow,shacl,explorer,agno,langchain,google-adk]"
 ]
 
 # ---------------- DEVELOPMENT DEPENDENCIES (PEP 735) ----------------
@@ -330,6 +337,14 @@ include = ["semantica*", "integrations*", "semantica_mcp*"]
 # static/* covers index.html / favicon; static/assets/* covers all JS/CSS chunks.
 "semantica" = ["static/*", "static/assets/*", "ontology/vocabulary/*.ttl"]
 
+[tool.uv]
+# databricks-sql-connector (latest 4.6.0) still caps oauthlib<4.0.0, but the
+# fixes for GHSA PKCE timing / RevocationEndpoint JSONP only ship in 4.0.0.
+# The connector only uses WebApplicationClient (prepare_authorization_request,
+# parse_request_uri_response, prepare_request_body, prepare_refresh_body),
+# which is unchanged in 4.0.0. Drop this once the connector lifts its cap.
+override-dependencies = ["oauthlib>=4.0.0"]
+
 [tool.black]
 line-length = 88
 
@@ -340,4 +355,5 @@ profile = "black"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests that require external services or API keys (deselect with '-m not integration')",
+    "no_gensim: marks tests that must still run when gensim is absent (e.g. they assert the missing-dependency behaviour)",
 ]
