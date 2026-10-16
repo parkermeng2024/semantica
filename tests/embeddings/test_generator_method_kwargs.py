@@ -1,9 +1,11 @@
 """EmbeddingGenerator(method=..., model_name=...) used to be ignored (#1808)."""
 
+import inspect
 import unittest
 from unittest.mock import patch
 
 from semantica.embeddings.embedding_generator import EmbeddingGenerator
+from semantica.embeddings.text_embedder import TextEmbedder
 
 
 class TestGeneratorMethodKwargs(unittest.TestCase):
@@ -43,8 +45,10 @@ class TestGeneratorMethodKwargs(unittest.TestCase):
         self.assertEqual(generator.text_embedder.model_name, "fast-model")
 
     def test_default_is_unchanged(self):
-        generator = EmbeddingGenerator()
-        self.assertEqual(generator.text_embedder.method, "fastembed")
+        # The generator must not override TextEmbedder's own default method,
+        # which is Ollama/bge-m3 in this fork (fastembed upstream).
+        default = inspect.signature(TextEmbedder.__init__).parameters["method"].default
+        self.assertEqual(EmbeddingGenerator().text_embedder.method, default)
 
     def test_caller_config_is_not_mutated(self):
         text = {"model_name": "fast-model"}
