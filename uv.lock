@@ -39,7 +39,7 @@ wheels = [
 
 [[package]]
 name = "agno"
-version = "3.0.10"
+version = "3.0.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agnoctl" },
@@ -53,9 +53,9 @@ dependencies = [
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/82/c4/1952e896fc04df0f754683512038a7d93d0a30f9846d1588e33d70fb7227/agno-3.0.10.tar.gz", hash = "sha256:7f25bb3f0b549923e18c20835d54fe16426b6bfe591b7690f0b4c8c08d068f9e", size = 3512656, upload-time = "2026-09-16T17:42:17.285Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/87/69e4de59b404fcfe303ed76f199407eb675cd83f8de10bba89ddb8fec6f8/agno-3.0.11.tar.gz", hash = "sha256:8e625ebea5265f0cf47b5dafbd749b0e6feb226f8b14f230e2674f5ded41fb7f", size = 3534513, upload-time = "2026-09-23T13:15:40.628Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/3a/ec8ca20bc5158288edeacb500a82af37b035de6f32f5d0a600c848d5c587/agno-3.0.10-py3-none-any.whl", hash = "sha256:0bc7b86cd386dd4ee334f81c5d9c686bafecca1ba3c541ebfab1d86162eac034", size = 3995527, upload-time = "2026-09-16T17:42:13.596Z" },
+    { url = "https://files.pythonhosted.org/packages/85/dc/df6eb84fe95ffb5bb8a34b997ad63886151f9c565acb60bf57225f71365e/agno-3.0.11-py3-none-any.whl", hash = "sha256:2517e8524739956648f4b62e6cf568623986144fa1426e430ace14efa1b78257", size = 4020409, upload-time = "2026-09-23T13:15:37.685Z" },
 ]
 
 [[package]]
@@ -8638,7 +8638,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agno", marker = "extra == 'agno'", specifier = ">=1.0.0" },
+    { name = "agno", marker = "extra == 'agno'", specifier = "==3.0.11" },
     { name = "anthropic", marker = "extra == 'llm-anthropic'", specifier = ">=0.122.0" },
     { name = "azure-storage-blob", marker = "extra == 'cloud'", specifier = ">=12.30.0" },
     { name = "beautifulsoup4", marker = "extra == 'documents'", specifier = ">=4.15.0" },
@@ -8660,7 +8660,7 @@ requires-dist = [
     { name = "faiss-gpu", marker = "extra == 'gpu'", specifier = ">=1.7.0" },
     { name = "falkordb", marker = "extra == 'graph-falkordb'", specifier = ">=1.0.0" },
     { name = "fastapi", marker = "extra == 'explorer'", specifier = ">=0.109.2" },
-    { name = "fastembed", marker = "extra == 'embeddings-local'", specifier = ">=0.2.0" },
+    { name = "fastembed", marker = "extra == 'embeddings-local'", specifier = ">=0.2.7" },
     { name = "gensim", marker = "extra == 'graph-embeddings'", specifier = ">=4.4.0" },
     { name = "gensim", marker = "extra == 'split-topic'", specifier = ">=4.4.0" },
     { name = "gitpython", marker = "extra == 'ingest-git'", specifier = ">=3.1.58" },
