@@ -78,6 +78,7 @@ import warnings
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from ..utils.exceptions import ProcessingError
+from ..utils.documents import document_text
 from ..utils.helpers import safe_import
 from ..utils.logging import get_logger
 from ..utils.progress_tracker import get_progress_tracker
@@ -502,16 +503,13 @@ class NERExtractor:
                 def process_item(idx, item):
                     try:
                         current_entities = []
-                        if isinstance(item, dict) and "content" in item:
-                            current_entities = self.extract_entities(item["content"], **kwargs)
-                        elif isinstance(item, str):
-                            current_entities = self.extract_entities(item, **kwargs)
-                        else:
-                            # Try converting to string
-                            try:
-                                current_entities = self.extract_entities(str(item), **kwargs)
-                            except Exception:
-                                current_entities = []
+                        # Parser output carries full_text; content/text are
+                        # older spellings. Unwrap the record instead of
+                        # extracting from its repr.
+                        try:
+                            current_entities = self.extract_entities(document_text(item), **kwargs)
+                        except Exception:
+                            current_entities = []
                         
                         # Add provenance metadata
                         for ent in current_entities:

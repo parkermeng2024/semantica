@@ -62,6 +62,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 from ..utils.exceptions import ProcessingError
+from ..utils.documents import document_text
 from ..utils.logging import get_logger
 from ..utils.progress_tracker import get_progress_tracker
 from .ner_extractor import Entity
@@ -195,7 +196,7 @@ class EventDetector:
                 def process_item(idx, item):
                     try:
                         # Prepare arguments for single item
-                        doc_text = item["content"] if isinstance(item, dict) and "content" in item else str(item)
+                        doc_text = document_text(item)
                         
                         # Detect
                         events = self.detect_events(doc_text, **kwargs)

@@ -61,6 +61,7 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 
 from ..utils.exceptions import ProcessingError
+from ..utils.documents import document_text
 from ..utils.logging import get_logger
 from ..utils.progress_tracker import get_progress_tracker
 from .ner_extractor import Entity
@@ -210,7 +211,7 @@ class SemanticNetworkExtractor:
 
                 def process_item(idx, item, doc_entities, doc_relations):
                     try:
-                        doc_text = item["content"] if isinstance(item, dict) and "content" in item else str(item)
+                        doc_text = document_text(item)
                         
                         # Extract
                         network = self.extract_network(

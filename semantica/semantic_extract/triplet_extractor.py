@@ -76,6 +76,7 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 
 from ..utils.exceptions import ProcessingError, ValidationError
+from ..utils.documents import document_text
 from ..utils.logging import get_logger
 from ..utils.progress_tracker import get_progress_tracker
 from .types import Entity, Relation, Triplet
@@ -209,7 +210,7 @@ class TripletExtractor:
                 def process_item(idx, item):
                     try:
                         # Prepare arguments for single item
-                        doc_text = item["content"] if isinstance(item, dict) and "content" in item else str(item)
+                        doc_text = document_text(item)
                         
                         doc_entities = None
                         if entities and isinstance(entities, list) and idx < len(entities):

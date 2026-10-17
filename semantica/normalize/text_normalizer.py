@@ -34,6 +34,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Union
 
 from ..utils.exceptions import ProcessingError, ValidationError
+from ..utils.documents import TEXT_KEYS, document_text
 from ..utils.logging import get_logger
 from ..utils.progress_tracker import get_progress_tracker
 from .text_cleaner import TextCleaner
@@ -100,22 +101,33 @@ class TextNormalizer:
         Normalize text content or a list of parsed documents.
         """
         if isinstance(source, list):
-            # Handle list of parsed documents
+            # Handle list of parsed documents: normalize every text-bearing
+            # field in place (parser output uses text/full_text, older callers
+            # content) and keep the record shape so downstream stages still see
+            # its metadata. Normalising str(doc) here used to feed the dict
+            # repr into the rest of the pipeline.
             normalized_docs = []
             for doc in source:
-                if isinstance(doc, dict) and "content" in doc:
-                    new_doc = doc.copy()
-                    new_doc["content"] = self.normalize_text(doc["content"], **options)
-                    normalized_docs.append(new_doc)
-                else:
-                    # If it's just a string or unknown, try to normalize it directly or skip
-                    try:
-                        normalized_docs.append(self.normalize_text(str(doc), **options))
-                    except Exception:
-                        normalized_docs.append(doc)
+                if isinstance(doc, dict):
+                    normalized_doc = doc.copy()
+                    normalized = False
+                    for key in TEXT_KEYS:
+                        value = normalized_doc.get(key)
+                        if isinstance(value, str):
+                            normalized_doc[key] = self.normalize_text(value, **options)
+                            normalized = True
+                    if normalized:
+                        normalized_docs.append(normalized_doc)
+                        continue
+                try:
+                    normalized_docs.append(
+                        self.normalize_text(document_text(doc), **options)
+                    )
+                except Exception:
+                    normalized_docs.append(doc)
             return normalized_docs
         else:
-            return self.normalize_text(str(source), **options)
+            return self.normalize_text(document_text(source), **options)
 
     def normalize_text(
         self,

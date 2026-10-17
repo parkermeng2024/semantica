@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 
 from ..utils.exceptions import ProcessingError
+from ..utils.documents import document_text
 from ..utils.logging import get_logger
 from .text_embedder import TextEmbedder
 
@@ -182,28 +183,13 @@ class EmbeddingGenerator:
         if isinstance(data, list):
             processed_data = []
             for item in data:
-                if isinstance(item, str):
-                    processed_data.append(item)
-                elif hasattr(item, "content") and item.content:
-                    # Handle FileObject or similar
-                    if isinstance(item.content, bytes):
-                        try:
-                            processed_data.append(item.content.decode("utf-8"))
-                        except Exception:
-                            # Fallback or skip
-                            processed_data.append("")
-                    else:
-                        processed_data.append(str(item.content))
-                elif isinstance(item, dict) and "content" in item:
-                    # Handle parsed/normalized doc
-                    processed_data.append(str(item["content"]))
-                else:
-                    # Try converting to string
-                    try:
-                        processed_data.append(str(item))
-                    except Exception:
-                        processed_data.append("")
-            
+                # Strings pass through; records are unwrapped from whichever
+                # text key they carry (parser output uses full_text).
+                try:
+                    processed_data.append(document_text(item))
+                except Exception:
+                    processed_data.append("")
+
             # Update data to be list of strings
             data = processed_data
 

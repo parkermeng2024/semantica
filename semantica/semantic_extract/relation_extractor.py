@@ -73,6 +73,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..utils.exceptions import ProcessingError
+from ..utils.documents import document_text
 from ..utils.logging import get_logger
 from ..utils.progress_tracker import get_progress_tracker
 from .types import Entity, Relation
@@ -217,13 +218,7 @@ class RelationExtractor:
 
                 def process_item(i, doc_item, ent_item):
                     try:
-                        doc_text = ""
-                        if isinstance(doc_item, dict) and "content" in doc_item:
-                            doc_text = doc_item["content"]
-                        elif isinstance(doc_item, str):
-                            doc_text = doc_item
-                        else:
-                            doc_text = str(doc_item)
+                        doc_text = document_text(doc_item)
                         
                         # Ensure ent_item is a list of entities
                         if not isinstance(ent_item, list):
