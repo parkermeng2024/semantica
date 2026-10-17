@@ -119,15 +119,15 @@ Forward chaining starts from ground facts and applies every matching rule until 
 
 ```python
 # String-format rules are parsed automatically
-# Variables are single uppercase letters or multi-character uppercase words
+# Variables use the ?name form, e.g. ?x or ?actor
 reasoner.add_rule(
-    "IF ThreatActor(X) AND Exploits(X, Y) AND CriticalVuln(Y) THEN HighRiskActor(X)"
+    "IF ThreatActor(?x) AND Exploits(?x, ?y) AND CriticalVuln(?y) THEN HighRiskActor(?x)"
 )
 reasoner.add_rule(
-    "IF HighRiskActor(X) AND Targets(X, Z) THEN CriticalTarget(Z)"
+    "IF HighRiskActor(?x) AND Targets(?x, ?z) THEN CriticalTarget(?z)"
 )
 reasoner.add_rule(
-    "IF SuppliedExploits(A, B) AND HighRiskActor(B) THEN HighRiskSupplier(A)"
+    "IF SuppliedExploits(?a, ?b) AND HighRiskActor(?b) THEN HighRiskSupplier(?a)"
 )
 
 # forward_chain() applies all rules until fixpoint
@@ -284,7 +284,7 @@ sparql = SPARQLReasoner()
 
 # Inference rules expand the SPARQL query before execution
 sparql.add_inference_rule(
-    "IF ThreatActor(X) AND Exploits(X, Y) AND CriticalVuln(Y) THEN HighRiskActor(X)"
+    "IF ThreatActor(?x) AND Exploits(?x, ?y) AND CriticalVuln(?y) THEN HighRiskActor(?x)"
 )
 
 query = """
@@ -684,13 +684,13 @@ reasoner.add_fact("RequiresMFA(tier1)")
 
 # Zero-trust access policy as inference rules
 reasoner.add_rule(
-    "IF User(U) AND HasMFA(U) AND RequiresMFA(T) AND Resource(R, T) THEN MFASatisfied(U, R)"
+    "IF User(?u) AND HasMFA(?u) AND RequiresMFA(?t) AND Resource(?r, ?t) THEN MFASatisfied(?u, ?r)"
 )
 reasoner.add_rule(
-    "IF User(U) AND Clearance(U, C) AND RequiresClearance(R, C) THEN ClearanceSatisfied(U, R)"
+    "IF User(?u) AND Clearance(?u, ?c) AND RequiresClearance(?r, ?c) THEN ClearanceSatisfied(?u, ?r)"
 )
 reasoner.add_rule(
-    "IF MFASatisfied(U, R) AND ClearanceSatisfied(U, R) THEN AccessGranted(U, R)"
+    "IF MFASatisfied(?u, ?r) AND ClearanceSatisfied(?u, ?r) THEN AccessGranted(?u, ?r)"
 )
 
 # Backward-chain the access decision

@@ -260,7 +260,7 @@ Claude chains:
 1. `add_entity(id="wkstn-047", type="Host", label="WKSTN-047")`
 2. `add_entity(id="dc01", type="Host", label="DC01")`
 3. `add_relationship(source="wkstn-047", target="dc01", type="lateral_movement")`
-4. `run_reasoning(facts=["Host(WKSTN-047)", "LateralMove(WKSTN-047, DC01)", "DC(DC01)"], rules=["IF LateralMove(X, Y) AND DC(Y) THEN CriticalIncident(X)"])`
+4. `run_reasoning(facts=["Host(WKSTN-047)", "LateralMove(WKSTN-047, DC01)", "DC(DC01)"], rules=["IF LateralMove(?x, ?y) AND DC(?y) THEN CriticalIncident(?x)"])`
 5. `record_decision(category="containment", scenario="Lateral movement to DC detected", outcome="isolate_wkstn047", confidence=0.95)`
 6. `get_causal_chain(decision_id="...", direction="downstream", max_depth=3)`
 
