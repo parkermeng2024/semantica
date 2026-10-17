@@ -4,8 +4,6 @@ description: "Text and graph embedding generation (Ollama, FastEmbed, Sentence-T
 icon: "vector-square"
 ---
 
-<!-- markdownlint-configure-file {"MD033": {"allowed_elements": ["Tabs", "Tab", "Check", "Warning", "Tip", "Steps", "Step", "Note"]}} -->
-
 **`semantica.embeddings`** converts text and graph structures into **dense vector representations**:
 
 - Provider-agnostic API: Ollama (default, local server, no GPU), FastEmbed, Sentence-Transformers, OpenAI, BGE
