@@ -253,6 +253,11 @@ def split_by_tokens(
     Returns:
         List of chunks
     """
+    # Track the backend that actually produced `tokens`: the transformers
+    # branch falls back to word splitting when the model cannot be loaded, and
+    # decoding must follow the same path.
+    backend = "words"
+
     # Try tiktoken first
     if TIKTOKEN_AVAILABLE:
         try:
@@ -262,10 +267,12 @@ def split_by_tokens(
             # Fallback to cl100k_base
             enc = tiktoken.get_encoding("cl100k_base")
             tokens = enc.encode(text)
+        backend = "tiktoken"
     elif TRANSFORMERS_AVAILABLE:
         try:
             tokenizer_obj = AutoTokenizer.from_pretrained(tokenizer)
             tokens = tokenizer_obj.encode(text, add_special_tokens=False)
+            backend = "transformers"
         except Exception:
             # Fallback to simple word splitting
             tokens = text.split()
@@ -283,10 +290,10 @@ def split_by_tokens(
         end_idx = min(start_idx + chunk_size, len(tokens))
         chunk_tokens = tokens[start_idx:end_idx]
 
-        # Convert tokens back to text
-        if TIKTOKEN_AVAILABLE:
+        # Convert tokens back to text with the backend that produced them
+        if backend == "tiktoken":
             chunk_text = enc.decode(chunk_tokens)
-        elif TRANSFORMERS_AVAILABLE:
+        elif backend == "transformers":
             chunk_text = tokenizer_obj.decode(chunk_tokens, skip_special_tokens=True)
         else:
             chunk_text = " ".join(chunk_tokens)
