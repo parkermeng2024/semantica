@@ -355,6 +355,46 @@ class InferenceResult:
     confidence: float = 1.0
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+
+def _first_present(payload: Dict[str, Any], *keys: str) -> Any:
+    """Return the first non-empty value among ``keys``."""
+    for key in keys:
+        value = payload.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _iter_members(value: Any) -> List[Any]:
+    """Return graph members from a sequence or an id-keyed mapping."""
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return []
+
+
+def _graph_members(payload: Any) -> Optional[List[Any]]:
+    """Return the members of a knowledge-graph payload.
+
+    Recognises ``GraphBuilder`` output (``entities`` / ``relationships``) and
+    ``ContextGraph`` (``nodes`` / ``edges``), as a dict or as an object
+    exposing those attributes. Returns ``None`` when ``payload`` is a single
+    record rather than a graph.
+    """
+    for keys in (("entities", "relationships"), ("nodes", "edges")):
+        values = [
+            payload.get(key) if isinstance(payload, dict) else getattr(payload, key, None)
+            for key in keys
+        ]
+        if any(value is not None for value in values):
+            members: List[Any] = []
+            for value in values:
+                members.extend(_iter_members(value))
+            return members
+    return None
+
+
 class Reasoner:
     """
     High-level Reasoner class for knowledge graph inference.
@@ -494,21 +534,53 @@ class Reasoner:
         self.rules.sort(key=lambda r: r.priority, reverse=True)
         return rule
         
-    def add_fact(self, fact: Union[str, Dict[str, Any]]) -> None:
-        """Add a fact to working memory."""
+    def add_fact(self, fact: Union[str, Dict[str, Any], Any]) -> None:
+        """Add a fact to working memory.
+
+        Accepts a ``Predicate(arg1, arg2)`` string, a single entity or
+        relationship record, or a whole knowledge-graph payload -- a
+        ``GraphBuilder`` result (``entities`` / ``relationships``), a
+        ``ContextGraph`` (``nodes`` / ``edges``) or either one's dict form.
+        Graph payloads are expanded member by member.
+        """
         if isinstance(fact, str):
             self.facts.add(fact.strip())
-        elif isinstance(fact, dict):
-            # Convert KG-style dict to fact strings
-            if "type" in fact and ("name" in fact or "id" in fact):
-                name = fact.get("name", fact.get("id"))
-                etype = fact.get("type", "Entity")
-                self.facts.add(f"{etype}({name})")
-            elif "source_id" in fact or "source_name" in fact:
-                source = fact.get("source_name", fact.get("source_id"))
-                target = fact.get("target_name", fact.get("target_id"))
-                rtype = fact.get("type", "Relationship")
-                self.facts.add(f"{rtype}({source}, {target})")
+            return
+
+        # ContextNode / ContextEdge records are read like their dict forms.
+        if not isinstance(fact, dict):
+            if hasattr(fact, "node_id"):
+                fact = {
+                    "node_id": getattr(fact, "node_id", None),
+                    "node_type": getattr(fact, "node_type", None),
+                }
+            elif hasattr(fact, "source_id") and hasattr(fact, "target_id"):
+                fact = {
+                    "source_id": getattr(fact, "source_id", None),
+                    "target_id": getattr(fact, "target_id", None),
+                    "edge_type": getattr(fact, "edge_type", None),
+                }
+
+        members = _graph_members(fact)
+        if members is not None:
+            for member in members:
+                self.add_fact(member)
+            return
+
+        if not isinstance(fact, dict):
+            return
+
+        name = _first_present(fact, "name", "id", "node_id")
+        entity_type = _first_present(fact, "type", "node_type", "entity_type")
+        if name is not None and entity_type is not None:
+            self.facts.add(f"{entity_type}({name})")
+            return
+
+        source = _first_present(fact, "source_name", "source_id", "source", "subject")
+        target = _first_present(fact, "target_name", "target_id", "target", "object")
+        if source is not None and target is not None:
+            rel_type = _first_present(fact, "type", "edge_type", "predicate", "relation")
+            self.facts.add(f"{rel_type or 'Relationship'}({source}, {target})")
 
     def infer_facts(
         self, 
